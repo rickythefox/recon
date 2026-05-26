@@ -88,6 +88,12 @@ impl SessionStatus {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum AgentKind {
+    Claude,
+    Codex,
+}
+
 #[derive(Debug, Clone)]
 pub struct Session {
     pub session_id: String,
@@ -108,6 +114,7 @@ pub struct Session {
     pub jsonl_path: PathBuf,
     pub last_file_size: u64,
     pub tags: HashMap<String, String>,
+    pub agent: AgentKind,
 }
 
 impl Session {
@@ -299,6 +306,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 jsonl_path: path,
                 last_file_size: info.file_size,
                 tags,
+                agent: AgentKind::Claude,
             });
         }
     }
@@ -394,6 +402,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 jsonl_path: path,
                 last_file_size: info.file_size,
                 tags,
+                agent: AgentKind::Claude,
             });
         } else {
             // No JSONL found — brand-new session, show as New placeholder
@@ -418,6 +427,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 jsonl_path: PathBuf::new(),
                 last_file_size: 0,
                 tags,
+                agent: AgentKind::Claude,
             });
         }
     }
