@@ -34,15 +34,20 @@ pub fn park() {
         .sessions
         .iter()
         .filter_map(|s| {
-            // Use the session ID from the JSONL filename, not s.session_id.
-            // For resumed sessions, s.session_id is a new ID but the JSONL
-            // (and `claude --resume`) uses the original session ID.
-            let resume_id = s
-                .jsonl_path
-                .file_stem()
-                .and_then(|f| f.to_str())
-                .map(|f| f.to_string())
-                .unwrap_or_else(|| s.session_id.clone());
+            // Determine the resume ID:
+            // - For Codex: use session_id directly (the jsonl_path stem is a rollout
+            //   filename, not the session UUID that codex --session expects).
+            // - For Claude: use the JSONL filename stem, which for resumed sessions
+            //   is the original session ID that `claude --resume` expects.
+            let resume_id = if s.agent == crate::session::AgentKind::Codex {
+                s.session_id.clone()
+            } else {
+                s.jsonl_path
+                    .file_stem()
+                    .and_then(|f| f.to_str())
+                    .map(|f| f.to_string())
+                    .unwrap_or_else(|| s.session_id.clone())
+            };
             Some(ParkedSession {
                 session_id: resume_id,
                 tmux_session: s.tmux_session.as_ref()?.clone(),

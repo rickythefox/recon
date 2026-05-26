@@ -163,7 +163,13 @@ pub fn codex_pane_status(pane_target: &str) -> SessionStatus {
             return SessionStatus::Input;
         }
 
+        // Prompt line: session is idle, waiting for next user input
         if trimmed.starts_with('\u{203A}') {
+            return SessionStatus::Idle;
+        }
+
+        // "Worked for Xs" separator indicates a completed turn
+        if trimmed.contains("Worked for") {
             return SessionStatus::Idle;
         }
 

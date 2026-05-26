@@ -333,6 +333,12 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
             continue;
         }
 
+        // Codex sessions are handled in their own loop below; skip them here
+        // to prevent duplicate Claude/New entries being created for Codex PIDs.
+        if live.agent == AgentKind::Codex {
+            continue;
+        }
+
         // For sessions that have a real session-id (not the "tmux-{name}" placeholder),
         // try to find the JSONL via resume detection. This handles resumed sessions
         // where the session file's session-id doesn't match the original JSONL filename.
