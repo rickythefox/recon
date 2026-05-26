@@ -72,11 +72,13 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
     let mut widths = vec![Constraint::Length(4)]; // #
     widths.extend(columns.iter().map(|c| column_constraint(*c, app)));
 
-    let table = Table::new(rows, widths).header(header).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" recon — Claude Code Sessions "),
-    );
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" recon "),
+        );
 
     frame.render_widget(table, area);
 }
@@ -103,7 +105,14 @@ fn render_column(col: Column, session: &Session) -> Cell<'static> {
     match col {
         Column::Session => {
             let name = session.tmux_session.as_deref().unwrap_or("—");
-            Cell::from(name.to_string())
+            Cell::from(Span::styled(
+                name.to_string(),
+                if session.agent == crate::session::AgentKind::Codex {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default()
+                },
+            ))
         }
         Column::Window => {
             let name = session
