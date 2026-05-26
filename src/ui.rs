@@ -105,9 +105,10 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                     spans.push(Span::styled(b, Style::default().fg(Color::Green)));
                 }
                 if let Some(name) = &session.session_name {
+                    let name_color = if is_selected { Color::White } else { Color::Magenta };
                     spans.push(Span::styled(
                         format!(" ({name})"),
-                        Style::default().fg(Color::Magenta),
+                        Style::default().fg(name_color),
                     ));
                 }
                 Cell::from(Line::from(spans))
@@ -147,7 +148,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
             if session.status == SessionStatus::Input {
                 row.style(Style::default().bg(Color::Rgb(50, 40, 0)))
             } else if display_idx == app.selected {
-                row.style(Style::default().bg(Color::DarkGray))
+                row.style(Style::default().bg(Color::Rgb(50, 50, 55)))
             } else {
                 row
             }
