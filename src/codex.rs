@@ -160,31 +160,41 @@ pub fn codex_pane_status(pane_target: &str) -> SessionStatus {
         "E L I C I T A T I O N",
     ];
 
-    let mut lines_checked = 0;
-    for line in content.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
+    // Collect last 15 non-empty lines for analysis.
+    // The Codex TUI layout (bottom-up): status bar, then either the prompt
+    // line (idle) or active streaming content (working). The user's `›` input
+    // line can sit above streaming output, so we can't return Idle on first
+    // `›` sight - we need to check what's below it.
+    let tail: Vec<&str> = content
+        .lines()
+        .rev()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .take(15)
+        .collect();
 
-        if input_patterns.iter().any(|p| trimmed.contains(p)) {
-            return SessionStatus::Input;
-        }
+    // Working: "esc to interrupt" appears while Codex is actively processing
+    if tail.iter().any(|l| l.contains("esc to interrupt")) {
+        return SessionStatus::Working;
+    }
 
-        // Prompt line: session is idle, waiting for next user input
-        if trimmed.starts_with('\u{203A}') {
-            return SessionStatus::Idle;
-        }
+    // Input: approval/permission prompts
+    if tail.iter().any(|l| input_patterns.iter().any(|p| l.contains(p))) {
+        return SessionStatus::Input;
+    }
 
-        // "Worked for Xs" separator indicates a completed turn
-        if trimmed.contains("Worked for") {
-            return SessionStatus::Idle;
+    // Idle: prompt `›` is near the bottom (within first 3 non-empty lines,
+    // i.e. just above the status bar). If it's deeper, active content has
+    // pushed it up, meaning Codex is working.
+    for (i, line) in tail.iter().enumerate() {
+        if line.starts_with('\u{203A}') {
+            return if i <= 2 { SessionStatus::Idle } else { SessionStatus::Working };
         }
+    }
 
-        lines_checked += 1;
-        if lines_checked >= 10 {
-            break;
-        }
+    // "Worked for" separator = turn just completed, idle
+    if tail.iter().any(|l| l.contains("Worked for")) {
+        return SessionStatus::Idle;
     }
 
     SessionStatus::Working
