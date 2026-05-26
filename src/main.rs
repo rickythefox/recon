@@ -1,5 +1,6 @@
 mod app;
 mod cli;
+mod codex;
 mod config;
 mod history;
 mod model;
