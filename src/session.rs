@@ -115,6 +115,9 @@ pub struct Session {
     pub last_file_size: u64,
     pub tags: HashMap<String, String>,
     pub agent: AgentKind,
+    // Overrides model-derived context window (used by Codex where the rollout
+    // reports the actual window size, which differs from naive model lookups).
+    pub context_window: Option<u64>,
 }
 
 impl Session {
@@ -127,21 +130,17 @@ impl Session {
 
     pub fn token_display(&self) -> String {
         let used = self.total_input_tokens + self.total_output_tokens;
-        let window = self
-            .model
-            .as_deref()
-            .map(model::context_window)
-            .unwrap_or(200_000);
+        let window = self.context_window.unwrap_or_else(|| {
+            self.model.as_deref().map(model::context_window).unwrap_or(200_000)
+        });
         format!("{}k / {}", used / 1000, format_window(window))
     }
 
     pub fn token_ratio(&self) -> f64 {
         let used = self.total_input_tokens + self.total_output_tokens;
-        let window = self
-            .model
-            .as_deref()
-            .map(model::context_window)
-            .unwrap_or(200_000);
+        let window = self.context_window.unwrap_or_else(|| {
+            self.model.as_deref().map(model::context_window).unwrap_or(200_000)
+        });
         if window == 0 {
             return 0.0;
         }
@@ -309,6 +308,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 last_file_size: info.file_size,
                 tags,
                 agent: AgentKind::Claude,
+                context_window: None,
             });
         }
     }
@@ -411,6 +411,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 last_file_size: info.file_size,
                 tags,
                 agent: AgentKind::Claude,
+                context_window: None,
             });
         } else {
             // No JSONL found — brand-new session, show as New placeholder
@@ -436,6 +437,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 last_file_size: 0,
                 tags,
                 agent: AgentKind::Claude,
+                context_window: None,
             });
         }
     }
@@ -455,7 +457,15 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
             .unwrap_or_else(|| live.pane_cwd.clone());
         let (project_name, relative_dir, branch) = git_project_info(&cwd);
 
-        let input_tokens = meta.as_ref().map(|m| m.tokens_used).unwrap_or(0);
+        // Read per-turn token info from rollout JSONL (current context, not accumulated total)
+        let rollout_path = meta.as_ref()
+            .and_then(|m| m.rollout_path.as_ref())
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let token_info = crate::codex::read_rollout_tokens(&rollout_path);
+        let input_tokens = token_info.as_ref().map(|t| t.last_input_tokens).unwrap_or(0);
+        let ctx_window = token_info.as_ref().map(|t| t.context_window).filter(|&w| w > 0);
+
         let status = determine_status(
             &PathBuf::new(),
             input_tokens,
@@ -485,13 +495,11 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 .map(|m| m.updated_at)
                 .and_then(crate::codex::epoch_to_iso),
             started_at: live.started_at,
-            jsonl_path: meta.as_ref()
-                .and_then(|m| m.rollout_path.as_ref())
-                .map(PathBuf::from)
-                .unwrap_or_default(),
+            jsonl_path: rollout_path,
             last_file_size: 0,
             tags,
             agent: AgentKind::Codex,
+            context_window: ctx_window,
         });
     }
 

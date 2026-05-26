@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::path::Path;
 use std::sync::Mutex;
 
 use crate::session::SessionStatus;
@@ -125,7 +127,6 @@ fn find_codex_session_recursive(pid: i32, depth: u8) -> Option<(i32, String)> {
 pub struct CodexSessionMeta {
     pub model: Option<String>,
     pub effort: Option<String>,
-    pub tokens_used: u64,
     pub cwd: Option<String>,
     pub git_branch: Option<String>,
     pub updated_at: u64,
@@ -146,7 +147,7 @@ pub fn query_session_meta(session_id: &str) -> Option<CodexSessionMeta> {
     conn.pragma_update(None, "journal_mode", "wal").ok();
 
     let mut stmt = conn.prepare(
-        "SELECT model, reasoning_effort, tokens_used, cwd, \
+        "SELECT model, reasoning_effort, cwd, \
          git_branch, updated_at, created_at, rollout_path \
          FROM threads WHERE id = ?1"
     ).ok()?;
@@ -155,12 +156,11 @@ pub fn query_session_meta(session_id: &str) -> Option<CodexSessionMeta> {
         Ok(CodexSessionMeta {
             model: row.get(0).ok(),
             effort: row.get(1).ok(),
-            tokens_used: row.get::<_, i64>(2).unwrap_or(0) as u64,
-            cwd: row.get(3).ok(),
-            git_branch: row.get(4).ok(),
-            updated_at: row.get::<_, i64>(5).unwrap_or(0) as u64,
-            created_at: row.get::<_, i64>(6).unwrap_or(0) as u64,
-            rollout_path: row.get(7).ok(),
+            cwd: row.get(2).ok(),
+            git_branch: row.get(3).ok(),
+            updated_at: row.get::<_, i64>(4).unwrap_or(0) as u64,
+            created_at: row.get::<_, i64>(5).unwrap_or(0) as u64,
+            rollout_path: row.get(6).ok(),
         })
     }).ok()
 }
@@ -174,6 +174,67 @@ pub fn epoch_to_iso(epoch: u64) -> Option<String> {
 /// Find the CWD for a Codex session from SQLite.
 pub fn find_codex_session_cwd(session_id: &str) -> Option<String> {
     query_session_meta(session_id).and_then(|m| m.cwd)
+}
+
+/// Per-turn token info extracted from the rollout JSONL's last token_count event.
+#[derive(Debug)]
+pub struct CodexTokenInfo {
+    pub last_input_tokens: u64,
+    pub context_window: u64,
+}
+
+/// Read the tail of a Codex rollout JSONL to find the last token_count event.
+/// Returns the current turn's input tokens and the model's context window.
+pub fn read_rollout_tokens(rollout_path: &Path) -> Option<CodexTokenInfo> {
+    let file = std::fs::File::open(rollout_path).ok()?;
+    let file_size = file.metadata().ok()?.len();
+    if file_size == 0 {
+        return None;
+    }
+
+    // Read last 100KB - enough to contain multiple token_count events
+    let offset = file_size.saturating_sub(100_000);
+    let mut reader = BufReader::new(file);
+    reader.seek(SeekFrom::Start(offset)).ok()?;
+
+    // Skip partial first line if we seeked into the middle
+    if offset > 0 {
+        let mut discard = String::new();
+        reader.read_line(&mut discard).ok()?;
+    }
+
+    let mut last_input = None;
+    let mut last_window = None;
+
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        if !line.contains("token_count") {
+            continue;
+        }
+        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&line) {
+            let payload = &obj["payload"];
+            if payload.get("type").and_then(|t| t.as_str()) == Some("token_count") {
+                let info = &payload["info"];
+                if let Some(v) = info["last_token_usage"]["input_tokens"].as_u64() {
+                    last_input = Some(v);
+                }
+                if let Some(v) = info["model_context_window"].as_u64() {
+                    last_window = Some(v);
+                }
+            }
+        }
+    }
+
+    Some(CodexTokenInfo {
+        last_input_tokens: last_input.unwrap_or(0),
+        context_window: last_window.unwrap_or(0),
+    })
 }
 
 /// Determine session status by inspecting a Codex TUI pane.
