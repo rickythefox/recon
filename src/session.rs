@@ -1289,6 +1289,14 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Evict stale Codex cache entries for PIDs no longer in tmux
+    let all_pane_pids: Vec<i32> = stdout
+        .lines()
+        .filter_map(|l| l.splitn(2, "|||").next()?.parse::<i32>().ok())
+        .collect();
+    crate::codex::evict_stale_codex_cache(&all_pane_pids);
+
     let mut results = Vec::new();
     let sessions_dir = dirs::home_dir()
         .map(|h| h.join(".claude").join("sessions"))
@@ -1353,8 +1361,8 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
             continue;
         }
 
-        // Try Codex: check if this pane runs codex
-        if let Some((codex_pid, session_id)) = crate::codex::find_codex_session(pid) {
+        // Try Codex: check if this pane runs codex (cached to avoid repeated lsof)
+        if let Some((codex_pid, session_id)) = crate::codex::find_codex_session_cached(pid) {
             results.push(DiscoveredPane {
                 pid: codex_pid,
                 tmux_session: session_name.to_string(),

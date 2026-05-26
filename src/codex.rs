@@ -1,4 +1,43 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use crate::session::SessionStatus;
+
+// Cache lsof results: pane PID -> (codex_pid, session_uuid).
+// lsof is expensive (~200-500ms per call on macOS) and we call it recursively
+// up to 3 levels deep. Caching avoids re-running it every 2s refresh cycle.
+// Entries are evicted when their pane PID disappears from tmux.
+static CODEX_PID_CACHE: Mutex<Option<HashMap<i32, (i32, String)>>> = Mutex::new(None);
+
+/// Look up a cached Codex session for a pane PID, or run lsof to discover it.
+pub fn find_codex_session_cached(pane_pid: i32) -> Option<(i32, String)> {
+    {
+        let cache = CODEX_PID_CACHE.lock().unwrap();
+        if let Some(map) = cache.as_ref() {
+            if let Some(entry) = map.get(&pane_pid) {
+                return Some(entry.clone());
+            }
+        }
+    }
+    // Cache miss - run the expensive lsof lookup
+    let result = find_codex_session(pane_pid)?;
+    {
+        let mut cache = CODEX_PID_CACHE.lock().unwrap();
+        if cache.is_none() {
+            *cache = Some(HashMap::new());
+        }
+        cache.as_mut().unwrap().insert(pane_pid, result.clone());
+    }
+    Some(result)
+}
+
+/// Remove cached entries for pane PIDs that are no longer in tmux.
+pub fn evict_stale_codex_cache(live_pane_pids: &[i32]) {
+    let mut cache = CODEX_PID_CACHE.lock().unwrap();
+    if let Some(map) = cache.as_mut() {
+        map.retain(|pid, _| live_pane_pids.contains(pid));
+    }
+}
 
 /// Extract the Codex session UUID from a running process by checking its open files.
 /// Looks for an open rollout JSONL file in ~/.codex/sessions/.
