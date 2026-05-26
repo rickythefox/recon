@@ -51,9 +51,12 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
         .map(|(display_idx, &real_idx)| {
             let session = &app.sessions[real_idx];
             let num = format!(" {} ", real_idx + 1);
+            let is_selected = display_idx == app.selected && session.status != SessionStatus::Input;
+            // Brighten dim colors on selected row so they stay visible
+            let dim = if is_selected { Color::Gray } else { Color::DarkGray };
 
             let mut cells = vec![Cell::from(num)];
-            cells.extend(columns.iter().map(|&col| render_column(col, session)));
+            cells.extend(columns.iter().map(|&col| render_column(col, session, dim)));
             let row = Row::new(cells);
 
             if session.status == SessionStatus::Input {
@@ -89,19 +92,19 @@ fn column_constraint(col: Column, app: &App) -> Constraint {
         return Constraint::Length(w);
     }
     match col {
-        Column::Session => Constraint::Length(16),
+        Column::Session => Constraint::Length(4),
         Column::Window => Constraint::Length(16),
         Column::Project => Constraint::Min(20),
         Column::Directory => Constraint::Length(20),
         Column::Status => Constraint::Length(10),
-        Column::Model => Constraint::Length(20),
+        Column::Model => Constraint::Length(14),
         Column::Context => Constraint::Length(14),
         Column::LastActivity => Constraint::Length(14),
     }
 }
 
 /// Render a single table cell for the given column of a session.
-fn render_column(col: Column, session: &Session) -> Cell<'static> {
+fn render_column(col: Column, session: &Session, dim: Color) -> Cell<'static> {
     match col {
         Column::Session => {
             let name = session.tmux_session.as_deref().unwrap_or("—");
@@ -123,26 +126,32 @@ fn render_column(col: Column, session: &Session) -> Cell<'static> {
             Cell::from(name.to_string()).style(Style::default().fg(Color::Magenta))
         }
         Column::Project => {
-            // repo::relative_dir::branch
+            // repo::relative_dir::branch (session name)
             let mut spans = vec![Span::raw(session.project_name.clone())];
             if let Some(dir) = &session.relative_dir {
-                spans.push(Span::styled("::", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled("::", Style::default().fg(dim)));
                 spans.push(Span::styled(dir.clone(), Style::default().fg(Color::Cyan)));
             }
             if let Some(b) = &session.branch {
-                spans.push(Span::styled("::", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled("::", Style::default().fg(dim)));
                 spans.push(Span::styled(b.clone(), Style::default().fg(Color::Green)));
+            }
+            if let Some(name) = &session.session_name {
+                spans.push(Span::styled(
+                    format!(" ({name})"),
+                    Style::default().fg(Color::Magenta),
+                ));
             }
             Cell::from(Line::from(spans))
         }
         Column::Directory => {
-            Cell::from(shorten_home(&session.cwd)).style(Style::default().fg(Color::DarkGray))
+            Cell::from(shorten_home(&session.cwd)).style(Style::default().fg(dim))
         }
         Column::Status => {
             let (dot, label, color) = match session.status {
                 SessionStatus::New => ("●", "New", Color::Blue),
                 SessionStatus::Working => ("●", "Working", Color::Green),
-                SessionStatus::Idle => ("●", "Idle", Color::DarkGray),
+                SessionStatus::Idle => ("●", "Idle", dim),
                 SessionStatus::Input => ("●", "Input", Color::Yellow),
             };
             Cell::from(Line::from(vec![
@@ -208,7 +217,11 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled("j/k", Style::default().fg(Color::Cyan)),
             Span::raw(" navigate  "),
             Span::styled("Enter", Style::default().fg(Color::Cyan)),
+            Span::raw("/"),
+            Span::styled("1-0", Style::default().fg(Color::Cyan)),
             Span::raw(" switch  "),
+            Span::styled("b", Style::default().fg(Color::Cyan)),
+            Span::raw(" back  "),
             Span::styled("x", Style::default().fg(Color::Cyan)),
             Span::raw(" kill  "),
             Span::styled("/", Style::default().fg(Color::Cyan)),
