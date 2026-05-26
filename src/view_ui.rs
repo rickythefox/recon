@@ -693,6 +693,7 @@ mod tests {
             jsonl_path: PathBuf::new(),
             last_file_size: 0,
             tags: std::collections::HashMap::new(),
+            agent: crate::session::AgentKind::Claude,
         }
     }
 
