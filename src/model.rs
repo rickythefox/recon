@@ -7,6 +7,10 @@ pub fn display_name(model_id: &str) -> &str {
         "claude-haiku-4-5-20251001" => "Haiku 4.5",
         "claude-opus-4-20250514" => "Opus 4",
         "claude-sonnet-4-20250514" => "Sonnet 4",
+        "gpt-5.5" => "GPT-5.5",
+        "gpt-5.4" => "GPT-5.4",
+        "o4-mini" => "o4-mini",
+        "o3" => "o3",
         _ => model_id,
     }
 }
@@ -14,17 +18,12 @@ pub fn display_name(model_id: &str) -> &str {
 /// Context window size for a given model ID.
 pub fn context_window(model_id: &str) -> u64 {
     match model_id {
-        "claude-opus-4-6" => 1_000_000,
-        "claude-sonnet-4-6" => 200_000,
-        "claude-sonnet-4-5-20250514" => 200_000,
-        "claude-haiku-4-5-20251001" => 200_000,
-        "claude-opus-4-20250514" => 200_000,
-        "claude-sonnet-4-20250514" => 200_000,
+        "claude-opus-4-6" | "gpt-5.5" => 1_000_000,
         _ => 200_000,
     }
 }
 
-/// Reverse lookup: display name (from /model output) → model ID.
+/// Reverse lookup: display name (from /model output) -> model ID.
 /// Returns None if the display name is not recognized.
 pub fn id_from_display_name(display: &str) -> Option<&'static str> {
     match display {
@@ -34,6 +33,10 @@ pub fn id_from_display_name(display: &str) -> Option<&'static str> {
         "Haiku 4.5" => Some("claude-haiku-4-5-20251001"),
         "Opus 4" => Some("claude-opus-4-20250514"),
         "Sonnet 4" => Some("claude-sonnet-4-20250514"),
+        "GPT-5.5" => Some("gpt-5.5"),
+        "GPT-5.4" => Some("gpt-5.4"),
+        "o4-mini" => Some("o4-mini"),
+        "o3" => Some("o3"),
         _ => None,
     }
 }
