@@ -219,7 +219,7 @@ impl App {
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
                             .unwrap_or_else(|| "claude".to_string());
-                        if let Ok(name) = tmux::create_session(&default_name, &cwd, None, &[]) {
+                        if let Ok(name) = tmux::create_session(&default_name, &cwd, None, &[], &crate::session::AgentKind::Claude) {
                             tmux::switch_to_pane(&name);
                             self.should_quit = true;
                         }

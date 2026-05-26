@@ -39,7 +39,7 @@ fn main() -> io::Result<()> {
             let (default_name, default_cwd) = tmux::default_new_session_info();
             let session_name = name.as_deref().unwrap_or(&default_name);
             let session_cwd = cwd.as_deref().unwrap_or(&default_cwd);
-            match tmux::create_session(session_name, session_cwd, command.as_deref(), &tag) {
+            match tmux::create_session(session_name, session_cwd, command.as_deref(), &tag, &crate::session::AgentKind::Claude) {
                 Ok(name) => {
                     if attach {
                         tmux::switch_to_pane(&name);
@@ -54,7 +54,8 @@ fn main() -> io::Result<()> {
         }
         Some(Command::Resume { id, name, no_attach }) => {
             if let Some(session_id) = id {
-                match tmux::resume_session(&session_id, name.as_deref()) {
+                // Default to Claude for direct --id resume (no way to know agent)
+                match tmux::resume_session(&session_id, name.as_deref(), &crate::session::AgentKind::Claude) {
                     Ok(sess) => {
                         if !no_attach {
                             tmux::switch_to_pane(&sess);
@@ -68,8 +69,8 @@ fn main() -> io::Result<()> {
                 }
             } else {
                 let result = history::run_resume_picker()?;
-                if let Some((session_id, sess_name)) = result {
-                    match tmux::resume_session(&session_id, Some(&sess_name)) {
+                if let Some((session_id, sess_name, agent)) = result {
+                    match tmux::resume_session(&session_id, Some(&sess_name), &agent) {
                         Ok(sess) => {
                             tmux::switch_to_pane(&sess);
                             eprintln!("Resumed in session: {sess}");

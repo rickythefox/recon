@@ -14,6 +14,12 @@ struct ParkedSession {
     session_id: String,
     tmux_session: String,
     cwd: String,
+    #[serde(default = "default_agent")]
+    agent: String,
+}
+
+fn default_agent() -> String {
+    "claude".to_string()
 }
 
 fn park_file_path() -> Option<std::path::PathBuf> {
@@ -41,6 +47,10 @@ pub fn park() {
                 session_id: resume_id,
                 tmux_session: s.tmux_session.as_ref()?.clone(),
                 cwd: s.cwd.clone(),
+                agent: match s.agent {
+                    crate::session::AgentKind::Claude => "claude".to_string(),
+                    crate::session::AgentKind::Codex => "codex".to_string(),
+                },
             })
         })
         .collect();
@@ -135,7 +145,12 @@ pub fn unpark() {
     );
 
     for s in &park_file.sessions {
-        match tmux::resume_session(&s.session_id, Some(&s.tmux_session)) {
+        // Parse agent from the stored string
+        let agent = match s.agent.as_str() {
+            "codex" => crate::session::AgentKind::Codex,
+            _ => crate::session::AgentKind::Claude,
+        };
+        match tmux::resume_session(&s.session_id, Some(&s.tmux_session), &agent) {
             Ok(name) => {
                 eprintln!(
                     "  Restored {} ({})",

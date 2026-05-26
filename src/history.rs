@@ -18,6 +18,7 @@ use ratatui::{
 };
 
 use crate::model;
+use crate::session::AgentKind;
 
 const MAX_ENTRIES: usize = 10;
 
@@ -29,6 +30,7 @@ pub struct ResumeEntry {
     pub model: Option<String>,
     pub tokens: u64,
     pub last_active: String, // RFC3339
+    pub agent: AgentKind,
 }
 
 /// Build list of resumable sessions by scanning JSONL files and filtering out live ones.
@@ -96,12 +98,89 @@ fn find_resumable_sessions() -> Vec<ResumeEntry> {
                 model: summary.model,
                 tokens: summary.tokens,
                 last_active: format_epoch_ms(mtime_ms),
+                agent: AgentKind::Claude,
             });
         }
     }
 
+    // Add resumable Codex sessions
+    entries.extend(find_resumable_codex_sessions(&live_ids));
+
     entries.sort_by(|a, b| b.last_active.cmp(&a.last_active));
     entries.truncate(MAX_ENTRIES);
+    entries
+}
+
+/// Find resumable Codex sessions from state_5.sqlite (non-live, last 7 days).
+fn find_resumable_codex_sessions(live_ids: &HashSet<String>) -> Vec<ResumeEntry> {
+    let db_path = match dirs::home_dir() {
+        Some(h) => h.join(".codex").join("state_5.sqlite"),
+        None => return vec![],
+    };
+    if !db_path.exists() {
+        return vec![];
+    }
+
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = match rusqlite::Connection::open_with_flags(&db_path, flags) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let _ = conn.pragma_update(None, "journal_mode", "wal");
+
+    // Query non-archived sessions from the last 7 days
+    let cutoff = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_sub(7 * 24 * 3600);
+
+    let mut stmt = match conn.prepare(
+        "SELECT id, model, tokens_used, cwd, git_branch, updated_at \
+         FROM threads \
+         WHERE is_archived = 0 AND updated_at > ?1 AND tokens_used > 0 \
+         ORDER BY updated_at DESC \
+         LIMIT 20"
+    ) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+
+    let rows = match stmt.query_map(rusqlite::params![cutoff as i64], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, i64>(2).unwrap_or(0) as u64,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, i64>(5).unwrap_or(0) as u64,
+        ))
+    }) {
+        Ok(r) => r,
+        Err(_) => return vec![],
+    };
+
+    let mut entries = Vec::new();
+    for row in rows.flatten() {
+        let (id, model, tokens, cwd, branch, updated_at) = row;
+
+        // Skip live sessions
+        if live_ids.contains(&id) {
+            continue;
+        }
+
+        let last_active = crate::codex::epoch_to_iso(updated_at).unwrap_or_default();
+        entries.push(ResumeEntry {
+            session_id: id,
+            cwd: cwd.unwrap_or_default(),
+            branch,
+            model,
+            tokens,
+            last_active,
+            agent: AgentKind::Codex,
+        });
+    }
+
     entries
 }
 
@@ -110,7 +189,8 @@ fn get_live_session_ids() -> HashSet<String> {
 }
 
 /// Interactive TUI picker for resuming a past session.
-pub fn run_resume_picker() -> io::Result<Option<(String, String)>> {
+/// Returns (session_id, display_name, agent_kind) on selection.
+pub fn run_resume_picker() -> io::Result<Option<(String, String, AgentKind)>> {
     let entries = find_resumable_sessions();
 
     enable_raw_mode()?;
@@ -164,6 +244,12 @@ pub fn run_resume_picker() -> io::Result<Option<(String, String)>> {
                     .map(|(i, e)| {
                         let short_id = &e.session_id[..8.min(e.session_id.len())];
 
+                        // Color session ID by agent type
+                        let id_color = match e.agent {
+                            AgentKind::Claude => Color::White,
+                            AgentKind::Codex => Color::Cyan,
+                        };
+
                         let project = dir_name(&e.cwd);
                         let project_cell = match &e.branch {
                             Some(b) => Cell::from(Line::from(vec![
@@ -178,7 +264,7 @@ pub fn run_resume_picker() -> io::Result<Option<(String, String)>> {
                             .model
                             .as_deref()
                             .map(|m| model::display_name(m).to_string())
-                            .unwrap_or_else(|| "—".to_string());
+                            .unwrap_or_else(|| "-".to_string());
 
                         let window = e.model.as_deref()
                             .map(model::context_window)
@@ -188,7 +274,7 @@ pub fn run_resume_picker() -> io::Result<Option<(String, String)>> {
 
                         let row = Row::new(vec![
                             Cell::from(format!(" {} ", i + 1)),
-                            Cell::from(short_id.to_string()),
+                            Cell::from(Span::styled(short_id.to_string(), Style::default().fg(id_color))),
                             project_cell,
                             Cell::from(model_display),
                             Cell::from(tokens),
@@ -250,7 +336,7 @@ pub fn run_resume_picker() -> io::Result<Option<(String, String)>> {
                         } else {
                             let entry = &entries[selected];
                             let name = dir_name(&entry.cwd);
-                            result = Some((entry.session_id.clone(), name));
+                            result = Some((entry.session_id.clone(), name, entry.agent.clone()));
                         }
                         break;
                     }
@@ -317,7 +403,7 @@ fn read_jsonl_summary(path: &std::path::Path) -> JsonlSummary {
     let size = file.metadata().map(|m| m.len()).unwrap_or(0);
     let mut reader = BufReader::new(file);
 
-    // Only read the last 1MB — we only need the last ~50 lines.
+    // Only read the last 1MB - we only need the last ~50 lines.
     const TAIL_BYTES: u64 = 1024 * 1024;
     if size > TAIL_BYTES {
         if reader.seek(SeekFrom::Start(size - TAIL_BYTES)).is_err() {
@@ -329,7 +415,6 @@ fn read_jsonl_summary(path: &std::path::Path) -> JsonlSummary {
     }
 
     // Heuristic: scan the last N lines for model/branch/tokens.
-    // In practice the last assistant entry is near the end of the file.
     const TAIL_LINES: usize = 50;
     let mut ring = std::collections::VecDeque::with_capacity(TAIL_LINES);
     let mut line = String::new();

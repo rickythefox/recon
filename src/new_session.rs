@@ -14,6 +14,7 @@ use crate::tmux;
 enum Field {
     Name,
     Cwd,
+    Agent,
 }
 
 pub struct NewSessionForm {
@@ -21,6 +22,7 @@ pub struct NewSessionForm {
     cwd: String,
     cursor_pos: usize,
     active: Field,
+    agent: crate::session::AgentKind,
     pub result: Option<String>,
 }
 
@@ -33,6 +35,7 @@ impl NewSessionForm {
             cwd,
             cursor_pos,
             active: Field::Name,
+            agent: crate::session::AgentKind::Claude,
             result: None,
         }
     }
@@ -41,6 +44,7 @@ impl NewSessionForm {
         match self.active {
             Field::Name => &self.name,
             Field::Cwd => &self.cwd,
+            Field::Agent => "",
         }
     }
 
@@ -48,6 +52,32 @@ impl NewSessionForm {
         match self.active {
             Field::Name => &mut self.name,
             Field::Cwd => &mut self.cwd,
+            Field::Agent => &mut self.name, // not used for Agent field
+        }
+    }
+
+    /// Expand cwd (tilde) and create session
+    fn create_session(&mut self) {
+        if self.name.trim().is_empty() {
+            return;
+        }
+        let cwd = if self.cwd.trim().is_empty() {
+            ".".to_string()
+        } else {
+            let c = self.cwd.trim().to_string();
+            if let Some(rest) = c.strip_prefix('~') {
+                if let Some(home) = dirs::home_dir() {
+                    format!("{}{rest}", home.display())
+                } else {
+                    c
+                }
+            } else {
+                c
+            }
+        };
+        match tmux::create_session(self.name.trim(), &cwd, None, &[], &self.agent) {
+            Ok(name) => self.result = Some(name),
+            Err(_) => self.result = Some(String::new()),
         }
     }
 
@@ -57,35 +87,25 @@ impl NewSessionForm {
                 self.result = Some(String::new());
             }
             KeyCode::Enter => {
-                if matches!(self.active, Field::Name) {
-                    if self.name.trim().is_empty() {
-                        return;
-                    }
-                    self.active = Field::Cwd;
-                    self.cursor_pos = self.cwd.len();
-                    return;
-                }
-                if self.name.trim().is_empty() {
-                    return;
-                }
-                let cwd = if self.cwd.trim().is_empty() {
-                    ".".to_string()
-                } else {
-                    let c = self.cwd.trim().to_string();
-                    if let Some(rest) = c.strip_prefix('~') {
-                        if let Some(home) = dirs::home_dir() {
-                            format!("{}{rest}", home.display())
-                        } else {
-                            c
+                match self.active {
+                    Field::Name => {
+                        if self.name.trim().is_empty() {
+                            return;
                         }
-                    } else {
-                        c
+                        self.active = Field::Cwd;
+                        self.cursor_pos = self.cwd.len();
                     }
-                };
-                match tmux::create_session(self.name.trim(), &cwd, None, &[]) {
-                    Ok(name) => self.result = Some(name),
-                    Err(_) => self.result = Some(String::new()),
+                    Field::Cwd | Field::Agent => {
+                        self.create_session();
+                    }
                 }
+            }
+            // Toggle agent when space is pressed on the Agent field
+            KeyCode::Char(' ') if matches!(self.active, Field::Agent) => {
+                self.agent = match self.agent {
+                    crate::session::AgentKind::Claude => crate::session::AgentKind::Codex,
+                    crate::session::AgentKind::Codex => crate::session::AgentKind::Claude,
+                };
             }
             KeyCode::Tab | KeyCode::Down => {
                 match self.active {
@@ -94,6 +114,10 @@ impl NewSessionForm {
                         self.cursor_pos = self.cwd.len();
                     }
                     Field::Cwd => {
+                        self.active = Field::Agent;
+                        self.cursor_pos = 0;
+                    }
+                    Field::Agent => {
                         self.active = Field::Name;
                         self.cursor_pos = self.name.len();
                     }
@@ -102,15 +126,21 @@ impl NewSessionForm {
             KeyCode::BackTab | KeyCode::Up => {
                 match self.active {
                     Field::Name => {
-                        self.active = Field::Cwd;
-                        self.cursor_pos = self.cwd.len();
+                        self.active = Field::Agent;
+                        self.cursor_pos = 0;
                     }
                     Field::Cwd => {
                         self.active = Field::Name;
                         self.cursor_pos = self.name.len();
                     }
+                    Field::Agent => {
+                        self.active = Field::Cwd;
+                        self.cursor_pos = self.cwd.len();
+                    }
                 }
             }
+            // Text editing only applies to Name and Cwd fields
+            _ if matches!(self.active, Field::Agent) => {}
             KeyCode::Backspace => {
                 let pos = self.cursor_pos;
                 if pos > 0 {
@@ -164,7 +194,7 @@ impl NewSessionForm {
     pub fn render(&self, frame: &mut Frame) {
         let area = frame.area();
 
-        // Name input block (3 rows: border + content + border)
+        // Name input block
         let name_active = matches!(self.active, Field::Name);
         let name_border = if name_active {
             Style::default().fg(Color::Cyan)
@@ -188,9 +218,22 @@ impl NewSessionForm {
             .title(" Directory ")
             .border_style(cwd_border);
 
+        // Agent selector block
+        let agent_active = matches!(self.active, Field::Agent);
+        let agent_border = if agent_active {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let agent_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Agent ")
+            .border_style(agent_border);
+
         let rows = Layout::vertical([
             Constraint::Length(3), // Name box
             Constraint::Length(3), // Dir box
+            Constraint::Length(3), // Agent box
             Constraint::Length(1), // Hints
             Constraint::Min(0),
         ])
@@ -208,6 +251,18 @@ impl NewSessionForm {
         frame.render_widget(
             Paragraph::new(self.cwd.as_str()).style(Style::default().fg(Color::White)),
             cwd_inner,
+        );
+
+        // Agent selector display
+        let agent_inner = agent_block.inner(rows[2]);
+        frame.render_widget(agent_block, rows[2]);
+        let (agent_label, agent_color) = match self.agent {
+            crate::session::AgentKind::Claude => ("Claude Code", Color::White),
+            crate::session::AgentKind::Codex => ("Codex CLI", Color::Cyan),
+        };
+        frame.render_widget(
+            Paragraph::new(agent_label).style(Style::default().fg(agent_color)),
+            agent_inner,
         );
 
         // Hints
@@ -228,19 +283,42 @@ impl NewSessionForm {
                 Span::styled("Esc", Style::default().fg(Color::Cyan)),
                 Span::raw(" cancel"),
             ]),
+            Field::Agent => Line::from(vec![
+                Span::styled(" Space", Style::default().fg(Color::Cyan)),
+                Span::raw(" toggle  "),
+                Span::styled("Enter", Style::default().fg(Color::Cyan)),
+                Span::raw(" create  "),
+                Span::styled("Tab", Style::default().fg(Color::Cyan)),
+                Span::raw(" switch  "),
+                Span::styled("Esc", Style::default().fg(Color::Cyan)),
+                Span::raw(" cancel"),
+            ]),
         };
-        frame.render_widget(Paragraph::new(hint), rows[2]);
+        frame.render_widget(Paragraph::new(hint), rows[3]);
 
-        // Cursor
-        let (cx, cy) = match self.active {
-            Field::Name => (name_inner.x + self.cursor_pos as u16, name_inner.y),
-            Field::Cwd => (cwd_inner.x + self.cursor_pos as u16, cwd_inner.y),
-        };
-        frame.set_cursor_position((cx, cy));
+        // Cursor positioning
+        match self.active {
+            Field::Name => {
+                let cx = name_inner.x + self.cursor_pos as u16;
+                let cy = name_inner.y;
+                frame.set_cursor_position((cx, cy));
+            }
+            Field::Cwd => {
+                let cx = cwd_inner.x + self.cursor_pos as u16;
+                let cy = cwd_inner.y;
+                frame.set_cursor_position((cx, cy));
+            }
+            Field::Agent => {
+                // No text cursor for agent selector
+                let cx = agent_inner.x;
+                let cy = agent_inner.y;
+                frame.set_cursor_position((cx, cy));
+            }
+        }
     }
 }
 
-/// Run the new-session form as a standalone TUI — identical setup to the main dashboard.
+/// Run the new-session form as a standalone TUI - identical setup to the main dashboard.
 pub fn run_new_session_form() -> io::Result<Option<String>> {
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
