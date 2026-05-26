@@ -167,6 +167,7 @@ pub fn format_window(tokens: u64) -> String {
 
 /// Discover sessions by scanning JSONL files, then matching to live tmux panes.
 pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Session> {
+
     let claude_dir = match dirs::home_dir() {
         Some(h) => h.join(".claude").join("projects"),
         None => return vec![],
@@ -319,7 +320,6 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
             });
         }
     }
-
     // Handle live sessions with no direct JSONL name match.
     // This covers two cases:
     //   1. Brand-new sessions (no JSONL yet) → show as New placeholder
@@ -1404,7 +1404,7 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
             || command == "codex"
             || command == "node";
 
-        let is_shell = command == "bash" || command == "sh" || command == "zsh" || command == "fish";
+        let is_shell = command == "bash" || command == "sh" || command == "zsh";
 
         if !is_candidate && !is_shell {
             continue;
@@ -1426,7 +1426,25 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
             continue;
         }
 
-        // Try Claude child: shell with claude as foreground child
+        // For "node"/"codex" panes, try Codex cache first (instant) before
+        // the expensive pgrep-based Claude child search.
+        if command == "node" || command == "codex" {
+            if let Some((codex_pid, session_id)) = crate::codex::find_codex_session_cached(pid) {
+                results.push(DiscoveredPane {
+                    pid: codex_pid,
+                    tmux_session: session_name.to_string(),
+                    tmux_window: window_name.to_string(),
+                    pane_target,
+                    pane_cwd: pane_path.to_string(),
+                    agent: AgentKind::Codex,
+                    codex_session_id: Some(session_id),
+                });
+                continue;
+            }
+        }
+
+        // All other candidates (version numbers, "claude") and shells:
+        // check for Claude child process via pgrep + session file
         if let Some(claude_pid) = find_claude_child_pid(pid) {
             results.push(DiscoveredPane {
                 pid: claude_pid,
@@ -1437,20 +1455,7 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
                 agent: AgentKind::Claude,
                 codex_session_id: None,
             });
-            continue;
-        }
 
-        // Try Codex: check if this pane runs codex (cached to avoid repeated lsof)
-        if let Some((codex_pid, session_id)) = crate::codex::find_codex_session_cached(pid) {
-            results.push(DiscoveredPane {
-                pid: codex_pid,
-                tmux_session: session_name.to_string(),
-                tmux_window: window_name.to_string(),
-                pane_target,
-                pane_cwd: pane_path.to_string(),
-                agent: AgentKind::Codex,
-                codex_session_id: Some(session_id),
-            });
         }
     }
 
