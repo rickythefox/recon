@@ -56,16 +56,13 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
             let dim = if is_selected { Color::Gray } else { Color::DarkGray };
 
             let mut cells = vec![Cell::from(num)];
-            cells.extend(columns.iter().map(|&col| render_column(col, session, dim)));
+            cells.extend(columns.iter().map(|&col| render_column(col, session, dim, is_selected)));
             let row = Row::new(cells);
 
             if session.status == SessionStatus::Input {
                 row.style(Style::default().bg(Color::Rgb(50, 40, 0)))
             } else if display_idx == app.selected {
-                // Muted blue-gray, not DarkGray: the Directory text and the
-                // Project "::" separators are drawn in DarkGray, so a DarkGray
-                // highlight would render them invisible on the selected row.
-                row.style(Style::default().bg(Color::Rgb(45, 50, 70)))
+                row.style(Style::default().bg(Color::Rgb(50, 50, 55)))
             } else {
                 row
             }
@@ -104,7 +101,7 @@ fn column_constraint(col: Column, app: &App) -> Constraint {
 }
 
 /// Render a single table cell for the given column of a session.
-fn render_column(col: Column, session: &Session, dim: Color) -> Cell<'static> {
+fn render_column(col: Column, session: &Session, dim: Color, is_selected: bool) -> Cell<'static> {
     match col {
         Column::Session => {
             let name = session.tmux_session.as_deref().unwrap_or("—");
@@ -137,9 +134,10 @@ fn render_column(col: Column, session: &Session, dim: Color) -> Cell<'static> {
                 spans.push(Span::styled(b.clone(), Style::default().fg(Color::Green)));
             }
             if let Some(name) = &session.session_name {
+                let name_color = if is_selected { Color::White } else { Color::Magenta };
                 spans.push(Span::styled(
                     format!(" ({name})"),
-                    Style::default().fg(Color::Magenta),
+                    Style::default().fg(name_color),
                 ));
             }
             Cell::from(Line::from(spans))
