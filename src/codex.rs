@@ -53,9 +53,17 @@ fn is_uuid(s: &str) -> bool {
     })
 }
 
-/// Check if a process (or its children) is a Codex CLI process.
+/// Check if a process (or its descendants) is a Codex CLI process.
 /// Returns the (pid, session_id) if found.
+/// Searches up to 3 levels deep: shell -> node wrapper -> native codex binary.
 pub fn find_codex_session(pid: i32) -> Option<(i32, String)> {
+    find_codex_session_recursive(pid, 3)
+}
+
+fn find_codex_session_recursive(pid: i32, depth: u8) -> Option<(i32, String)> {
+    if depth == 0 {
+        return None;
+    }
     if let Some(uuid) = session_id_from_lsof(pid) {
         return Some((pid, uuid));
     }
@@ -65,8 +73,8 @@ pub fn find_codex_session(pid: i32) -> Option<(i32, String)> {
         .ok()?;
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         if let Some(child_pid) = line.trim().parse::<i32>().ok() {
-            if let Some(uuid) = session_id_from_lsof(child_pid) {
-                return Some((child_pid, uuid));
+            if let Some(result) = find_codex_session_recursive(child_pid, depth - 1) {
+                return Some(result);
             }
         }
     }
