@@ -567,6 +567,8 @@ fn render_character(frame: &mut Frame, session: &Session, area: Rect, tick: u64,
     let name = session.tmux_session.as_deref().unwrap_or("???");
     let name_style = if is_selected {
         Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else if session.agent == crate::session::AgentKind::Codex {
+        Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::White)
     };

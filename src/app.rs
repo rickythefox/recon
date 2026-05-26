@@ -441,6 +441,10 @@ impl App {
                     "last_activity": s.last_activity,
                     "started_at": s.started_at,
                     "tags": s.tags,
+                    "agent": match s.agent {
+                        crate::session::AgentKind::Claude => "claude",
+                        crate::session::AgentKind::Codex => "codex",
+                    },
                 })
             })
             .collect();

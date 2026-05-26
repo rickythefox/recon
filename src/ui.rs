@@ -119,7 +119,14 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 
             let row = Row::new(vec![
                 Cell::from(num),
-                Cell::from(tmux_name.to_string()),
+                Cell::from(Span::styled(
+                    tmux_name.to_string(),
+                    if session.agent == crate::session::AgentKind::Codex {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default()
+                    },
+                )),
                 project_cell,
                 dir_cell,
                 status_cell,
@@ -154,7 +161,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" recon — Claude Code Sessions "),
+                .title(" recon "),
         );
 
     frame.render_widget(table, area);
