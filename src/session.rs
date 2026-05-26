@@ -282,6 +282,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 info.input_tokens,
                 info.output_tokens,
                 Some(&live.pane_target),
+                &live.agent,
             );
 
             matched_session_ids.insert(session_id.clone());
@@ -380,6 +381,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 info.input_tokens,
                 info.output_tokens,
                 Some(&live.pane_target),
+                &live.agent,
             );
 
             let tags = read_tmux_tags(&live.tmux_session);
@@ -432,6 +434,61 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
         }
     }
 
+    // Handle Codex sessions from live_map.
+    for (session_id, live) in &live_map {
+        if live.agent != AgentKind::Codex {
+            continue;
+        }
+        if known_pids.contains(&live.pid) {
+            continue;
+        }
+
+        let meta = crate::codex::query_session_meta(session_id);
+        let cwd = meta.as_ref()
+            .and_then(|m| m.cwd.clone())
+            .unwrap_or_else(|| live.pane_cwd.clone());
+        let (project_name, relative_dir, branch) = git_project_info(&cwd);
+
+        let input_tokens = meta.as_ref().map(|m| m.tokens_used).unwrap_or(0);
+        let status = determine_status(
+            &PathBuf::new(),
+            input_tokens,
+            0,
+            Some(&live.pane_target),
+            &AgentKind::Codex,
+        );
+
+        let tags = read_tmux_tags(&live.tmux_session);
+        sessions.push(Session {
+            session_id: session_id.clone(),
+            project_name,
+            branch: meta.as_ref()
+                .and_then(|m| m.git_branch.clone())
+                .or(branch),
+            cwd,
+            relative_dir,
+            tmux_session: Some(live.tmux_session.clone()),
+            pane_target: Some(live.pane_target.clone()),
+            model: meta.as_ref().and_then(|m| m.model.clone()),
+            effort: meta.as_ref().and_then(|m| m.effort.clone()),
+            total_input_tokens: input_tokens,
+            total_output_tokens: 0,
+            status,
+            pid: Some(live.pid),
+            last_activity: meta.as_ref()
+                .map(|m| m.updated_at)
+                .and_then(crate::codex::epoch_to_iso),
+            started_at: live.started_at,
+            jsonl_path: meta.as_ref()
+                .and_then(|m| m.rollout_path.as_ref())
+                .map(PathBuf::from)
+                .unwrap_or_default(),
+            last_file_size: 0,
+            tags,
+            agent: AgentKind::Codex,
+        });
+    }
+
     // Sort by last activity at minute resolution (most recent first),
     // then by started_at as tiebreaker. Truncating to the minute prevents
     // the table from reordering on every poll cycle.
@@ -449,51 +506,78 @@ fn truncate_to_minute(ts: &Option<String>) -> Option<String> {
     ts.as_ref().map(|s| s.get(..16).unwrap_or(s).to_string())
 }
 
-/// Info about a live claude session, built from tmux + session files.
+/// Info about a live agent session, built from tmux + session files.
 struct LiveSessionInfo {
     pid: i32,
     tmux_session: String,
     pane_target: String,
     pane_cwd: String,
     started_at: u64,
+    agent: AgentKind,
 }
 
-/// Build a map from JSONL session_id → live session info.
+/// Build a map from session_id -> live session info.
 ///
-/// Joins two sources:
-///   1. tmux list-panes: PID → (tmux_session, pane_cwd) for panes running claude
-///   2. ~/.claude/sessions/{PID}.json: PID → (session_id, started_at)
+/// Joins multiple sources:
+///   - tmux list-panes: discover agent panes (Claude and Codex)
+///   - ~/.claude/sessions/{PID}.json: PID -> (session_id, started_at) for Claude
+///   - Codex SQLite DB: session metadata for Codex
 fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
     let pid_session_map = read_pid_session_map();
-    let tmux_panes = discover_claude_tmux_panes();
+    let tmux_panes = discover_agent_tmux_panes();
 
     let mut map = HashMap::new();
-    for (pid, tmux_session, pane_target, pane_cwd) in tmux_panes {
-        if let Some(info) = pid_session_map.get(&pid) {
-            map.insert(
-                info.session_id.clone(),
-                LiveSessionInfo {
-                    pid,
-                    tmux_session,
-                    pane_target,
-                    pane_cwd,
-                    started_at: info.started_at,
-                },
-            );
-        } else {
-            // Tmux pane running claude but no session file yet (just started).
-            // Use pane_target (not tmux session name) as placeholder key so that
-            // two Claude panes in the same tmux session don't collide.
-            map.insert(
-                format!("tmux-{pane_target}"),
-                LiveSessionInfo {
-                    pid,
-                    tmux_session,
-                    pane_target,
-                    pane_cwd,
-                    started_at: 0,
-                },
-            );
+    for pane in tmux_panes {
+        match pane.agent {
+            AgentKind::Claude => {
+                if let Some(info) = pid_session_map.get(&pane.pid) {
+                    map.insert(
+                        info.session_id.clone(),
+                        LiveSessionInfo {
+                            pid: pane.pid,
+                            tmux_session: pane.tmux_session,
+                            pane_target: pane.pane_target,
+                            pane_cwd: pane.pane_cwd,
+                            started_at: info.started_at,
+                            agent: AgentKind::Claude,
+                        },
+                    );
+                } else {
+                    // Tmux pane running claude but no session file yet (just started).
+                    // Use pane_target as placeholder key so two panes don't collide.
+                    map.insert(
+                        format!("tmux-{}", pane.pane_target),
+                        LiveSessionInfo {
+                            pid: pane.pid,
+                            tmux_session: pane.tmux_session,
+                            pane_target: pane.pane_target,
+                            pane_cwd: pane.pane_cwd,
+                            started_at: 0,
+                            agent: AgentKind::Claude,
+                        },
+                    );
+                }
+            }
+            AgentKind::Codex => {
+                // For Codex, use the codex_session_id as the map key.
+                // Query SQLite for started_at.
+                if let Some(session_id) = pane.codex_session_id {
+                    let started_at = crate::codex::query_session_meta(&session_id)
+                        .map(|m| m.created_at)
+                        .unwrap_or(0);
+                    map.insert(
+                        session_id,
+                        LiveSessionInfo {
+                            pid: pane.pid,
+                            tmux_session: pane.tmux_session,
+                            pane_target: pane.pane_target,
+                            pane_cwd: pane.pane_cwd,
+                            started_at,
+                            agent: AgentKind::Codex,
+                        },
+                    );
+                }
+            }
         }
     }
     map
@@ -1032,10 +1116,19 @@ pub fn find_session_cwd(session_id: &str) -> Option<String> {
 /// - Working: JSONL modified in last 5s
 /// - Input: last activity within 10 minutes (active conversation, waiting for user)
 /// - Idle: last activity older than 10 minutes
-fn determine_status(_path: &Path, input_tokens: u64, output_tokens: u64, pane_target: Option<&str>) -> SessionStatus {
+fn determine_status(
+    _path: &Path,
+    input_tokens: u64,
+    output_tokens: u64,
+    pane_target: Option<&str>,
+    agent: &AgentKind,
+) -> SessionStatus {
     // tmux pane content is the source of truth for active sessions
     if let Some(target) = pane_target {
-        let pane = pane_status(target);
+        let pane = match agent {
+            AgentKind::Claude => pane_status(target),
+            AgentKind::Codex => crate::codex::codex_pane_status(target),
+        };
         // Only show New if pane also looks idle (no active streaming)
         if input_tokens == 0 && output_tokens == 0 && pane == SessionStatus::Idle {
             return SessionStatus::New;
@@ -1164,9 +1257,18 @@ fn read_pid_session_map() -> HashMap<i32, SessionFileInfo> {
     map
 }
 
-/// Get tmux panes running claude.
-/// Returns Vec<(pid, session_name, pane_cwd)>.
-fn discover_claude_tmux_panes() -> Vec<(i32, String, String, String)> {
+/// A discovered tmux pane running a code agent (Claude or Codex).
+struct DiscoveredPane {
+    pid: i32,
+    tmux_session: String,
+    pane_target: String,
+    pane_cwd: String,
+    agent: AgentKind,
+    codex_session_id: Option<String>,
+}
+
+/// Get tmux panes running code agents (Claude or Codex).
+fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
     let output = match std::process::Command::new("tmux")
         .args([
             "list-panes",
@@ -1201,33 +1303,60 @@ fn discover_claude_tmux_panes() -> Vec<(i32, String, String, String)> {
         let window_index = parts[4];
         let pane_index = parts[5];
 
-        // Claude shows up as a version number (e.g. "2.1.76") or "claude" or "node"
-        let is_claude = command
+        // Candidate commands: version number (e.g. "2.1.76"), "claude", "codex", "node"
+        let is_candidate = command
             .chars()
             .next()
             .map(|c| c.is_ascii_digit())
             .unwrap_or(false)
             || command == "claude"
+            || command == "codex"
             || command == "node";
 
-        if is_claude {
-            // pane_pid is the initial process — it may be claude itself (recon launch)
-            // or a shell with claude as the foreground child (manual `claude` in a terminal).
-            // Try the pane PID first, fall back to searching children.
-            let claude_pid = if sessions_dir.join(format!("{pid}.json")).exists() {
-                Some(pid)
-            } else {
-                find_claude_child_pid(pid)
-            };
-            if let Some(cpid) = claude_pid {
-                let pane_target = format!("{session_name}:{window_index}.{pane_index}");
-                results.push((cpid, session_name.to_string(), pane_target, pane_path.to_string()));
-            }
-        } else if command == "bash" || command == "sh" || command == "zsh" {
-            if let Some(claude_pid) = find_claude_child_pid(pid) {
-                let pane_target = format!("{session_name}:{window_index}.{pane_index}");
-                results.push((claude_pid, session_name.to_string(), pane_target, pane_path.to_string()));
-            }
+        let is_shell = command == "bash" || command == "sh" || command == "zsh" || command == "fish";
+
+        if !is_candidate && !is_shell {
+            continue;
+        }
+
+        let pane_target = format!("{session_name}:{window_index}.{pane_index}");
+
+        // Try Claude first: direct PID has a session file
+        if sessions_dir.join(format!("{pid}.json")).exists() {
+            results.push(DiscoveredPane {
+                pid,
+                tmux_session: session_name.to_string(),
+                pane_target,
+                pane_cwd: pane_path.to_string(),
+                agent: AgentKind::Claude,
+                codex_session_id: None,
+            });
+            continue;
+        }
+
+        // Try Claude child: shell with claude as foreground child
+        if let Some(claude_pid) = find_claude_child_pid(pid) {
+            results.push(DiscoveredPane {
+                pid: claude_pid,
+                tmux_session: session_name.to_string(),
+                pane_target,
+                pane_cwd: pane_path.to_string(),
+                agent: AgentKind::Claude,
+                codex_session_id: None,
+            });
+            continue;
+        }
+
+        // Try Codex: check if this pane runs codex
+        if let Some((codex_pid, session_id)) = crate::codex::find_codex_session(pid) {
+            results.push(DiscoveredPane {
+                pid: codex_pid,
+                tmux_session: session_name.to_string(),
+                pane_target,
+                pane_cwd: pane_path.to_string(),
+                agent: AgentKind::Codex,
+                codex_session_id: Some(session_id),
+            });
         }
     }
 
