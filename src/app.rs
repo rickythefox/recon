@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::session::{self, Session};
+use crate::state;
 use crate::tmux;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -24,11 +25,14 @@ pub struct App {
     pub filter_active: bool,              // search input has focus
     pub filter_text: String,              // current search query
     pub filter_cursor: usize,             // cursor position in query
+    last_session_id: Option<String>,      // restored from ~/.config/recon/state.json
+    prev_session_id: Option<String>,      // for 'b' to toggle back
     prev_sessions: HashMap<String, Session>,
 }
 
 impl App {
     pub fn new() -> Self {
+        let saved = state::load();
         App {
             sessions: Vec::new(),
             selected: 0,
@@ -42,6 +46,8 @@ impl App {
             filter_active: false,
             filter_text: String::new(),
             filter_cursor: 0,
+            last_session_id: saved.last_session_id,
+            prev_session_id: saved.prev_session_id,
             prev_sessions: HashMap::new(),
         }
     }
@@ -86,6 +92,11 @@ impl App {
                         .unwrap_or("")
                         .to_lowercase()
                         .contains(&query)
+                    || s.session_name
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&query)
             })
             .map(|(i, _)| i)
             .collect()
@@ -106,6 +117,39 @@ impl App {
         indices.get(self.selected).copied()
     }
 
+    /// Restore selection to the last-used session after refresh.
+    pub fn restore_selection(&mut self) {
+        if let Some(ref saved_id) = self.last_session_id {
+            let filtered = self.filtered_indices();
+            for (display_idx, &real_idx) in filtered.iter().enumerate() {
+                if self.sessions[real_idx].session_id == *saved_id {
+                    self.selected = display_idx;
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Switch to the session at the given real index, save state, and quit.
+    fn switch_to_session(&mut self, real_idx: usize) {
+        if let Some(session) = self.sessions.get(real_idx) {
+            if let Some(target) = &session.pane_target {
+                state::save(&session.session_id, self.last_session_id.as_deref());
+                tmux::switch_to_pane(target);
+                self.should_quit = true;
+            }
+        }
+    }
+
+    /// Save the currently highlighted session to state.
+    fn save_selected_state(&self) {
+        if let Some(real_idx) = self.resolve_selected() {
+            if let Some(session) = self.sessions.get(real_idx) {
+                state::save(&session.session_id, self.last_session_id.as_deref());
+            }
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) {
         if self.filter_active {
             self.handle_key_filter(key);
@@ -124,6 +168,7 @@ impl App {
     fn jump_to_next_input(&mut self) {
         if let Some(session) = self.sessions.iter().find(|s| s.status == session::SessionStatus::Input) {
             if let Some(target) = &session.pane_target {
+                state::save(&session.session_id, self.last_session_id.as_deref());
                 tmux::switch_to_pane(target);
                 self.should_quit = true;
             }
@@ -132,12 +177,16 @@ impl App {
 
     fn handle_key_table(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('q') => {
+                self.save_selected_state();
+                self.should_quit = true;
+            }
             KeyCode::Esc => {
                 if !self.filter_text.is_empty() {
                     self.filter_text.clear();
                     self.selected = 0;
                 } else {
+                    self.save_selected_state();
                     self.should_quit = true;
                 }
             }
@@ -161,11 +210,28 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(real_idx) = self.resolve_selected() {
-                    if let Some(session) = self.sessions.get(real_idx) {
-                        if let Some(target) = &session.pane_target {
-                            tmux::switch_to_pane(target);
-                            self.should_quit = true;
-                        }
+                    self.switch_to_session(real_idx);
+                }
+            }
+            // Digit keys: switch to session by displayed # column number
+            KeyCode::Char(c @ '1'..='9') => {
+                let target_num = (c as usize) - ('0' as usize);
+                let filtered = self.filtered_indices();
+                if let Some(&real_idx) = filtered.iter().find(|&&ri| ri + 1 == target_num) {
+                    self.switch_to_session(real_idx);
+                }
+            }
+            KeyCode::Char('0') => {
+                let filtered = self.filtered_indices();
+                if let Some(&real_idx) = filtered.iter().find(|&&ri| ri + 1 == 10) {
+                    self.switch_to_session(real_idx);
+                }
+            }
+            KeyCode::Char('b') => {
+                if let Some(ref prev_id) = self.prev_session_id.clone() {
+                    let filtered = self.filtered_indices();
+                    if let Some(&real_idx) = filtered.iter().find(|&&ri| self.sessions[ri].session_id == *prev_id) {
+                        self.switch_to_session(real_idx);
                     }
                 }
             }
@@ -198,6 +264,7 @@ impl App {
                 KeyCode::Enter => {
                     if let Some(session) = self.selected_zoomed_session() {
                         if let Some(target) = session.pane_target.clone() {
+                            state::save(&session.session_id.clone(), self.last_session_id.as_deref());
                             tmux::switch_to_pane(&target);
                             self.should_quit = true;
                         }
@@ -237,7 +304,10 @@ impl App {
                 self.filter_cursor = 0;
                 self.selected = 0;
             }
-            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('q') => {
+                self.save_selected_state();
+                self.should_quit = true;
+            }
             KeyCode::Esc => {
                 if self.view_zoomed_room.is_some() {
                     self.view_zoomed_room = None;
@@ -246,6 +316,7 @@ impl App {
                     self.filter_text.clear();
                     self.selected = 0;
                 } else {
+                    self.save_selected_state();
                     self.should_quit = true;
                 }
             }
@@ -282,6 +353,7 @@ impl App {
                 if indices.len() == 1 {
                     if let Some(session) = self.sessions.get(indices[0]) {
                         if let Some(target) = &session.pane_target {
+                            state::save(&session.session_id, self.last_session_id.as_deref());
                             tmux::switch_to_pane(target);
                             self.should_quit = true;
                             return;
@@ -441,6 +513,7 @@ impl App {
                     "last_activity": s.last_activity,
                     "started_at": s.started_at,
                     "tags": s.tags,
+                    "session_name": s.session_name,
                     "agent": match s.agent {
                         crate::session::AgentKind::Claude => "claude",
                         crate::session::AgentKind::Codex => "codex",

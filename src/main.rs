@@ -6,6 +6,7 @@ mod model;
 mod new_session;
 mod park;
 mod session;
+mod state;
 mod tmux;
 mod ui;
 mod view_ui;
@@ -140,6 +141,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, start_mode: Vi
     let mut app = App::new();
     app.view_mode = start_mode;
     app.refresh();
+    app.restore_selection();
 
     let refresh_interval = Duration::from_secs(2);
     let mut last_refresh = Instant::now();

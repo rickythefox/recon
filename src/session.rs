@@ -114,6 +114,7 @@ pub struct Session {
     pub jsonl_path: PathBuf,
     pub last_file_size: u64,
     pub tags: HashMap<String, String>,
+    pub session_name: Option<String>,
     pub agent: AgentKind,
     // Overrides model-derived context window (used by Codex where the rollout
     // reports the actual window size, which differs from naive model lookups).
@@ -238,6 +239,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                             prev.and_then(|s| s.model.clone()),
                             prev.and_then(|s| s.effort.clone()),
                             prev.and_then(|s| s.last_activity.clone()),
+                            prev.and_then(|s| s.session_name.clone()),
                         );
                         let cwd = info.cwd
                             .or_else(|| prev.map(|s| s.cwd.clone()))
@@ -252,6 +254,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                         existing.total_input_tokens = info.input_tokens;
                         existing.total_output_tokens = info.output_tokens;
                         existing.last_activity = info.last_activity;
+                        existing.session_name = info.session_name;
                         existing.jsonl_path = path;
                         existing.last_file_size = info.file_size;
                     }
@@ -269,6 +272,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 prev.and_then(|s| s.model.clone()),
                 prev.and_then(|s| s.effort.clone()),
                 prev.and_then(|s| s.last_activity.clone()),
+                prev.and_then(|s| s.session_name.clone()),
             );
 
             let cwd = info
@@ -307,6 +311,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 jsonl_path: path,
                 last_file_size: info.file_size,
                 tags,
+                session_name: info.session_name,
                 agent: AgentKind::Claude,
                 context_window: None,
             });
@@ -377,6 +382,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 prev.and_then(|s| s.model.clone()),
                 prev.and_then(|s| s.effort.clone()),
                 prev.and_then(|s| s.last_activity.clone()),
+                prev.and_then(|s| s.session_name.clone()),
             );
 
             let cwd = info.cwd.clone().unwrap_or_else(|| live.pane_cwd.clone());
@@ -410,6 +416,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 jsonl_path: path,
                 last_file_size: info.file_size,
                 tags,
+                session_name: info.session_name,
                 agent: AgentKind::Claude,
                 context_window: None,
             });
@@ -436,6 +443,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 jsonl_path: PathBuf::new(),
                 last_file_size: 0,
                 tags,
+                session_name: None,
                 agent: AgentKind::Claude,
                 context_window: None,
             });
@@ -498,6 +506,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
             jsonl_path: rollout_path,
             last_file_size: 0,
             tags,
+            session_name: meta.as_ref().and_then(|m| m.title.clone()),
             agent: AgentKind::Codex,
             context_window: ctx_window,
         });
@@ -605,6 +614,7 @@ struct ParsedInfo {
     effort: Option<String>,
     cwd: Option<String>,
     last_activity: Option<String>,
+    session_name: Option<String>,
     file_size: u64,
 }
 
@@ -803,6 +813,7 @@ fn parse_jsonl(
     prev_model: Option<String>,
     prev_effort: Option<String>,
     prev_activity: Option<String>,
+    prev_session_name: Option<String>,
 ) -> ParsedInfo {
     let file = match fs::File::open(path) {
         Ok(f) => f,
@@ -814,6 +825,7 @@ fn parse_jsonl(
                 effort: prev_effort,
                 cwd: None,
                 last_activity: prev_activity,
+                session_name: prev_session_name,
                 file_size: 0,
             }
         }
@@ -829,6 +841,7 @@ fn parse_jsonl(
             effort: prev_effort,
             cwd: None,
             last_activity: prev_activity,
+            session_name: prev_session_name,
             file_size,
         };
     }
@@ -839,6 +852,7 @@ fn parse_jsonl(
     let mut model = prev_model;
     let mut effort = prev_effort;
     let mut last_activity = prev_activity;
+    let mut session_name = prev_session_name;
     let mut cwd = None;
 
     if prev_file_size > 0 {
@@ -942,6 +956,16 @@ fn parse_jsonl(
                     model = Some(id.to_string());
                 }
             }
+        } else if trimmed.contains("\"type\":\"custom-title\"") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if let Some(title) = v.get("customTitle").and_then(|t| t.as_str()) {
+                    if title.is_empty() {
+                        session_name = None;
+                    } else {
+                        session_name = Some(title.to_string());
+                    }
+                }
+            }
         }
     }
 
@@ -952,6 +976,7 @@ fn parse_jsonl(
         effort,
         cwd,
         last_activity,
+        session_name,
         file_size,
     }
 }

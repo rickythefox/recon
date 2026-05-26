@@ -59,6 +59,9 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
         .map(|(display_idx, &real_idx)| {
             let session = &app.sessions[real_idx];
             let num = format!(" {} ", real_idx + 1);
+            let is_selected = display_idx == app.selected && session.status != SessionStatus::Input;
+            // Brighten dim colors on selected row so they stay visible
+            let dim = if is_selected { Color::Gray } else { Color::DarkGray };
 
             let tmux_name = session
                 .tmux_session
@@ -69,7 +72,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
             let (status_dot, status_label, status_color) = match session.status {
                 SessionStatus::New => ("●", "New", Color::Blue),
                 SessionStatus::Working => ("●", "Working", Color::Green),
-                SessionStatus::Idle => ("●", "Idle", Color::DarkGray),
+                SessionStatus::Idle => ("●", "Idle", dim),
                 SessionStatus::Input => ("●", "Input", Color::Yellow),
             };
 
@@ -90,16 +93,22 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 
             let cwd_display = shorten_home(&session.cwd);
 
-            // Project: repo::relative_dir::branch
+            // Project: repo::relative_dir::branch (session name)
             let project_cell = {
                 let mut spans = vec![Span::raw(&session.project_name)];
                 if let Some(dir) = &session.relative_dir {
-                    spans.push(Span::styled("::", Style::default().fg(Color::DarkGray)));
+                    spans.push(Span::styled("::", Style::default().fg(dim)));
                     spans.push(Span::styled(dir.clone(), Style::default().fg(Color::Cyan)));
                 }
                 if let Some(b) = &session.branch {
-                    spans.push(Span::styled("::", Style::default().fg(Color::DarkGray)));
+                    spans.push(Span::styled("::", Style::default().fg(dim)));
                     spans.push(Span::styled(b, Style::default().fg(Color::Green)));
+                }
+                if let Some(name) = &session.session_name {
+                    spans.push(Span::styled(
+                        format!(" ({name})"),
+                        Style::default().fg(Color::Magenta),
+                    ));
                 }
                 Cell::from(Line::from(spans))
             };
@@ -115,7 +124,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 
             // Directory: dimmed
             let dir_cell =
-                Cell::from(cwd_display).style(Style::default().fg(Color::DarkGray));
+                Cell::from(cwd_display).style(Style::default().fg(dim));
 
             let row = Row::new(vec![
                 Cell::from(num),
@@ -147,11 +156,11 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 
     let widths = [
         Constraint::Length(4),   // #
-        Constraint::Length(16),  // Session
+        Constraint::Length(4),   // Session
         Constraint::Min(20),    // Project (repo + branch)
         Constraint::Length(20), // Directory
         Constraint::Length(10), // Status
-        Constraint::Length(20), // Model
+        Constraint::Length(14), // Model
         Constraint::Length(14), // Context
         Constraint::Length(14), // Last Activity
     ];
@@ -202,7 +211,11 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled("j/k", Style::default().fg(Color::Cyan)),
             Span::raw(" navigate  "),
             Span::styled("Enter", Style::default().fg(Color::Cyan)),
+            Span::raw("/"),
+            Span::styled("1-0", Style::default().fg(Color::Cyan)),
             Span::raw(" switch  "),
+            Span::styled("b", Style::default().fg(Color::Cyan)),
+            Span::raw(" back  "),
             Span::styled("x", Style::default().fg(Color::Cyan)),
             Span::raw(" kill  "),
             Span::styled("/", Style::default().fg(Color::Cyan)),

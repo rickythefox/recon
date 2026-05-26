@@ -132,6 +132,7 @@ pub struct CodexSessionMeta {
     pub updated_at: u64,
     pub created_at: u64,
     pub rollout_path: Option<String>,
+    pub title: Option<String>,
 }
 
 /// Query Codex session metadata from ~/.codex/state_5.sqlite.
@@ -148,7 +149,7 @@ pub fn query_session_meta(session_id: &str) -> Option<CodexSessionMeta> {
 
     let mut stmt = conn.prepare(
         "SELECT model, reasoning_effort, cwd, \
-         git_branch, updated_at, created_at, rollout_path \
+         git_branch, updated_at, created_at, rollout_path, title \
          FROM threads WHERE id = ?1"
     ).ok()?;
 
@@ -161,6 +162,7 @@ pub fn query_session_meta(session_id: &str) -> Option<CodexSessionMeta> {
             updated_at: row.get::<_, i64>(4).unwrap_or(0) as u64,
             created_at: row.get::<_, i64>(5).unwrap_or(0) as u64,
             rollout_path: row.get(6).ok(),
+            title: row.get::<_, String>(7).ok().filter(|s| !s.is_empty()),
         })
     }).ok()
 }
