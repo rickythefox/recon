@@ -19,6 +19,7 @@ pub struct App {
     pub should_quit: bool,
     pub view_mode: ViewMode,
     pub tick: u64,
+    selected_changed_tick: u64,
     pub view_page: usize,
     pub view_zoomed_room: Option<String>, // room name when zoomed in
     pub view_zoom_index: Option<usize>,   // pending zoom request from key press
@@ -41,6 +42,7 @@ impl App {
             should_quit: false,
             view_mode: ViewMode::Table,
             tick: 0,
+            selected_changed_tick: 0,
             view_page: 0,
             view_zoomed_room: None,
             view_zoom_index: None,
@@ -70,14 +72,29 @@ impl App {
 
         let count = self.filtered_indices().len();
         if count == 0 {
-            self.selected = 0;
+            self.set_selected(0);
         } else if self.selected >= count {
-            self.selected = count - 1;
+            self.set_selected(count - 1);
         }
     }
 
     pub fn advance_tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
+    }
+
+    pub fn selected_scroll_tick(&self) -> u64 {
+        self.tick.saturating_sub(self.selected_changed_tick)
+    }
+
+    fn set_selected(&mut self, selected: usize) {
+        if self.selected != selected {
+            self.selected = selected;
+            self.selected_changed_tick = self.tick;
+        }
+    }
+
+    fn reset_selected_scroll(&mut self) {
+        self.selected_changed_tick = self.tick;
     }
 
     pub fn filtered_indices(&self) -> Vec<usize> {
@@ -113,9 +130,9 @@ impl App {
     fn clamp_selection(&mut self) {
         let count = self.filtered_indices().len();
         if count == 0 {
-            self.selected = 0;
+            self.set_selected(0);
         } else if self.selected >= count {
-            self.selected = count - 1;
+            self.set_selected(count - 1);
         }
     }
 
@@ -131,7 +148,7 @@ impl App {
             let filtered = self.filtered_indices();
             for (display_idx, &real_idx) in filtered.iter().enumerate() {
                 if self.sessions[real_idx].session_id == *saved_id {
-                    self.selected = display_idx;
+                    self.set_selected(display_idx);
                     return;
                 }
             }
@@ -196,7 +213,8 @@ impl App {
             KeyCode::Esc => {
                 if !self.filter_text.is_empty() {
                     self.filter_text.clear();
-                    self.selected = 0;
+                    self.set_selected(0);
+                    self.reset_selected_scroll();
                 } else {
                     self.save_selected_state();
                     self.should_quit = true;
@@ -206,18 +224,19 @@ impl App {
                 self.filter_active = true;
                 self.filter_text.clear();
                 self.filter_cursor = 0;
-                self.selected = 0;
+                self.set_selected(0);
+                self.reset_selected_scroll();
             }
             KeyCode::Char('v') => self.view_mode = ViewMode::View,
             KeyCode::Char('j') | KeyCode::Down => {
                 let count = self.filtered_indices().len();
                 if count > 0 {
-                    self.selected = (self.selected + 1).min(count - 1);
+                    self.set_selected((self.selected + 1).min(count - 1));
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 if self.selected > 0 {
-                    self.selected -= 1;
+                    self.set_selected(self.selected - 1);
                 }
             }
             KeyCode::Enter => {
@@ -314,7 +333,8 @@ impl App {
                 self.filter_active = true;
                 self.filter_text.clear();
                 self.filter_cursor = 0;
-                self.selected = 0;
+                self.set_selected(0);
+                self.reset_selected_scroll();
             }
             KeyCode::Char('q') => {
                 self.save_selected_state();
@@ -326,7 +346,8 @@ impl App {
                     self.view_selected_agent = 0;
                 } else if !self.filter_text.is_empty() {
                     self.filter_text.clear();
-                    self.selected = 0;
+                    self.set_selected(0);
+                    self.reset_selected_scroll();
                 } else {
                     self.save_selected_state();
                     self.should_quit = true;
@@ -358,7 +379,8 @@ impl App {
                 self.filter_active = false;
                 self.filter_text.clear();
                 self.filter_cursor = 0;
-                self.selected = 0;
+                self.set_selected(0);
+                self.reset_selected_scroll();
             }
             KeyCode::Enter => {
                 let indices = self.filtered_indices();
@@ -391,6 +413,7 @@ impl App {
                     self.filter_text.replace_range(byte_pos..next_byte, "");
                     self.filter_cursor -= 1;
                     self.clamp_selection();
+                    self.reset_selected_scroll();
                 }
             }
             KeyCode::Delete => {
@@ -410,6 +433,7 @@ impl App {
                         .unwrap_or(self.filter_text.len());
                     self.filter_text.replace_range(byte_pos..next_byte, "");
                     self.clamp_selection();
+                    self.reset_selected_scroll();
                 }
             }
             KeyCode::Left => {
@@ -435,16 +459,17 @@ impl App {
                 self.filter_text.clear();
                 self.filter_cursor = 0;
                 self.clamp_selection();
+                self.reset_selected_scroll();
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 let count = self.filtered_indices().len();
                 if count > 0 {
-                    self.selected = (self.selected + 1).min(count - 1);
+                    self.set_selected((self.selected + 1).min(count - 1));
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
-                    self.selected -= 1;
+                    self.set_selected(self.selected - 1);
                 }
             }
             KeyCode::Tab | KeyCode::Char('i') => {
@@ -460,6 +485,7 @@ impl App {
                 self.filter_text.insert(byte_pos, c);
                 self.filter_cursor += 1;
                 self.clamp_selection();
+                self.reset_selected_scroll();
             }
             _ => {}
         }
@@ -549,5 +575,64 @@ impl App {
             "sessions": sessions,
         }))
         .unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn make_session(id: &str) -> Session {
+        Session {
+            session_id: id.to_string(),
+            project_name: "recon".to_string(),
+            branch: None,
+            cwd: "/tmp".to_string(),
+            relative_dir: None,
+            tmux_session: Some(format!("tmux-{id}")),
+            tmux_window: None,
+            pane_target: None,
+            model: None,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            status: session::SessionStatus::Idle,
+            pid: None,
+            effort: None,
+            last_activity: None,
+            started_at: 0,
+            jsonl_path: PathBuf::new(),
+            last_file_size: 0,
+            tags: HashMap::new(),
+            session_name: Some("long session title".to_string()),
+            agent: session::AgentKind::Claude,
+            context_window: None,
+        }
+    }
+
+    fn make_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn changing_table_selection_resets_scroll_tick() {
+        let mut app = App::new();
+        app.sessions = vec![make_session("a"), make_session("b")];
+        app.tick = 10;
+
+        assert_eq!(app.selected_scroll_tick(), 10);
+
+        app.handle_key(make_key(KeyCode::Down));
+
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.selected_scroll_tick(), 0);
+
+        app.advance_tick();
+        assert_eq!(app.selected_scroll_tick(), 1);
+
+        app.handle_key(make_key(KeyCode::Up));
+
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.selected_scroll_tick(), 0);
     }
 }
