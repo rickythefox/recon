@@ -142,4 +142,24 @@ mod tests {
         assert_eq!(context_window("claude-opus-4-20250514"), 200_000);
         assert_eq!(context_window("something-unknown"), 200_000);
     }
+
+    #[test]
+    fn displays_opus_4_8_compactly() {
+        assert_eq!(display_name("claude-opus-4-8"), "Opus 4.8");
+        assert_eq!(format_with_effort("claude-opus-4-8", ""), "Opus 4.8");
+    }
+
+    #[test]
+    fn maps_opus_4_8_display_name_back_to_id() {
+        assert_eq!(id_from_display_name("Opus 4.8"), Some("claude-opus-4-8"));
+        assert_eq!(
+            id_from_display_name("Opus 4.8 (1M context)"),
+            Some("claude-opus-4-8")
+        );
+    }
+
+    #[test]
+    fn opus_4_8_uses_one_million_context_window() {
+        assert_eq!(context_window("claude-opus-4-8"), 1_000_000);
+    }
 }
