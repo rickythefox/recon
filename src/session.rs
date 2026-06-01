@@ -1208,6 +1208,8 @@ fn pane_status(pane_target: &str) -> SessionStatus {
 
 fn pane_status_from_content(content: &str) -> SessionStatus {
     let mut lines_checked = 0;
+    let mut background_tasks = None;
+
     for line in content.lines().rev() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -1221,7 +1223,7 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
 
         // Background shell tasks are surfaced in Claude's status footer.
         if let Some(count) = background_shell_count(trimmed) {
-            return SessionStatus::BackgroundTasks(count);
+            background_tasks = Some(count);
         }
 
         // Working: line starts with a spinner character and contains "…"
@@ -1246,11 +1248,16 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
         }
     }
 
+    if let Some(count) = background_tasks {
+        return SessionStatus::BackgroundTasks(count);
+    }
+
     SessionStatus::Idle
 }
 
 fn background_shell_count(line: &str) -> Option<u32> {
-    if !(line.contains("still running") || line.contains("for agents")) {
+    let is_footer = line.contains("bypass permissions") || line.starts_with('\u{23F5}');
+    if !(line.contains("still running") || line.contains("for agents") || is_footer) {
         return None;
     }
 
@@ -1563,6 +1570,37 @@ mod tests {
         assert_eq!(
             pane_status_from_content(content),
             SessionStatus::BackgroundTasks(1)
+        );
+    }
+
+    #[test]
+    fn claude_pane_status_keeps_working_when_background_shells_also_run() {
+        let content = "\
+✽ Proving parity and measuring in TEST… (30s · ↓ 1.6k tokens)
+
+────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 31.0% | .../work
+  ⏵⏵ bypass permissions on · 2 shells
+";
+
+        assert_eq!(pane_status_from_content(content), SessionStatus::Working);
+    }
+
+    #[test]
+    fn claude_pane_status_reports_background_shell_count_from_cropped_idle_footer() {
+        let content = "\
+────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 31.0% | .../work
+  ⏵⏵ bypass permissions on · 2 shells
+";
+
+        assert_eq!(
+            pane_status_from_content(content),
+            SessionStatus::BackgroundTasks(2)
         );
     }
 
