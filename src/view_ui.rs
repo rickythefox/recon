@@ -19,6 +19,7 @@ const SPRITE_RENDER_H: u16 = (SPRITE_H as u16 + 1) / 2; // terminal lines for sp
 const CHAR_WIDTH: u16 = (SPRITE_W as u16) + 4; // sprite + padding
 const CHAR_LABEL_LINES: u16 = 4; // name + branch + status + context bar
 const CHAR_HEIGHT: u16 = SPRITE_RENDER_H + CHAR_LABEL_LINES;
+const BACKGROUND_TASK_COLOR: Color = Color::Green;
 
 // ── Pixel sprite data ────────────────────────────────────────────────
 // Each sprite is SPRITE_H rows x SPRITE_W cols. 0 = transparent.
@@ -192,6 +193,7 @@ fn sprite_data(status: &SessionStatus, frame: usize) -> (&'static Sprite, Palett
         SessionStatus::Working => (&SPRITE_WORKING[frame % 3], PAL_WORKING),
         SessionStatus::Idle => (&SPRITE_IDLE[0], PAL_IDLE),
         SessionStatus::Input => (&SPRITE_INPUT[frame % 3], PAL_INPUT),
+        SessionStatus::BackgroundTasks(_) => (&SPRITE_WORKING[frame % 3], PAL_WORKING),
     }
 }
 
@@ -302,6 +304,7 @@ fn group_into_rooms(sessions: &[Session], indices: &[usize]) -> Vec<Room> {
 fn animation_frame(status: &SessionStatus, tick: u64) -> usize {
     match status {
         SessionStatus::Working => ((tick / 2) % 3) as usize,
+        SessionStatus::BackgroundTasks(_) => ((tick / 2) % 3) as usize,
         SessionStatus::Input => (tick % 3) as usize,
         _ => 0,
     }
@@ -320,6 +323,7 @@ fn status_color(status: &SessionStatus) -> Color {
         SessionStatus::Working => Color::Green,
         SessionStatus::Idle => Color::DarkGray,
         SessionStatus::Input => Color::Yellow,
+        SessionStatus::BackgroundTasks(_) => BACKGROUND_TASK_COLOR,
     }
 }
 
@@ -808,5 +812,13 @@ mod tests {
         assert_eq!(rooms[1].name, "/idle-recent");  // most recent activity
         assert_eq!(rooms[2].name, "/idle-old");     // older activity
         assert_eq!(rooms[3].name, "/egg");           // no activity last
+    }
+
+    #[test]
+    fn background_task_status_uses_working_color() {
+        assert_eq!(
+            status_color(&SessionStatus::BackgroundTasks(1)),
+            status_color(&SessionStatus::Working)
+        );
     }
 }

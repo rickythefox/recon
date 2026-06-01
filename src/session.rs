@@ -75,15 +75,18 @@ pub enum SessionStatus {
     Working,
     Idle,
     Input,
+    BackgroundTasks(u32),
 }
 
 impl SessionStatus {
-    pub fn label(&self) -> &str {
+    pub fn label(&self) -> String {
         match self {
-            SessionStatus::New => "New",
-            SessionStatus::Working => "Working",
-            SessionStatus::Idle => "Idle",
-            SessionStatus::Input => "Input",
+            SessionStatus::New => "New".to_string(),
+            SessionStatus::Working => "Working".to_string(),
+            SessionStatus::Idle => "Idle".to_string(),
+            SessionStatus::Input => "Input".to_string(),
+            SessionStatus::BackgroundTasks(1) => "1 task".to_string(),
+            SessionStatus::BackgroundTasks(count) => format!("{count} tasks"),
         }
     }
 }
@@ -1200,6 +1203,10 @@ fn pane_status(pane_target: &str) -> SessionStatus {
 
     let content = String::from_utf8_lossy(&output.stdout);
 
+    pane_status_from_content(&content)
+}
+
+fn pane_status_from_content(content: &str) -> SessionStatus {
     let mut lines_checked = 0;
     for line in content.lines().rev() {
         let trimmed = line.trim();
@@ -1210,6 +1217,11 @@ fn pane_status(pane_target: &str) -> SessionStatus {
         // Input: permission prompt on the very last non-empty line
         if lines_checked == 0 && trimmed.contains("Esc to cancel") {
             return SessionStatus::Input;
+        }
+
+        // Background shell tasks are surfaced in Claude's status footer.
+        if let Some(count) = background_shell_count(trimmed) {
+            return SessionStatus::BackgroundTasks(count);
         }
 
         // Working: line starts with a spinner character and contains "…"
@@ -1235,6 +1247,19 @@ fn pane_status(pane_target: &str) -> SessionStatus {
     }
 
     SessionStatus::Idle
+}
+
+fn background_shell_count(line: &str) -> Option<u32> {
+    if !(line.contains("still running") || line.contains("for agents")) {
+        return None;
+    }
+
+    let words: Vec<&str> = line.split_whitespace().collect();
+    words.windows(2).find_map(|window| {
+        let count = window[0].parse::<u32>().ok()?;
+        let label = window[1].trim_matches(|c: char| !c.is_alphanumeric());
+        matches!(label, "shell" | "shells").then_some(count)
+    })
 }
 
 /// Check if a character is a Claude Code activity indicator.
@@ -1524,5 +1549,59 @@ mod tests {
     fn validate_cwd_accepts_real_dir() {
         assert!(validate_cwd("/tmp"));
     }
-}
 
+    #[test]
+    fn claude_pane_status_reports_background_shell_count_from_footer() {
+        let content = "\
+────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 30.0% | .../work
+  ⏵⏵ bypass permissions on · 1 shell · ← for agents
+";
+
+        assert_eq!(
+            pane_status_from_content(content),
+            SessionStatus::BackgroundTasks(1)
+        );
+    }
+
+    #[test]
+    fn background_task_status_label_omits_bg_prefix() {
+        assert_eq!(SessionStatus::BackgroundTasks(1).label(), "1 task");
+        assert_eq!(SessionStatus::BackgroundTasks(4).label(), "4 tasks");
+    }
+
+    #[test]
+    fn claude_pane_status_reports_plural_background_shell_count() {
+        let content = "\
+✻ Sautéed for 33s · 4 shells still running
+
+────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 30.0% | .../work
+  ⏵⏵ bypass permissions on · 4 shells · ← for agents
+";
+
+        assert_eq!(
+            pane_status_from_content(content),
+            SessionStatus::BackgroundTasks(4)
+        );
+    }
+
+    #[test]
+    fn claude_pane_status_ignores_completed_shell_command_summary() {
+        let content = "\
+  Ran 1 shell command
+
+────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 30.0% | .../work
+  ⏵⏵ bypass permissions on · ← for agents
+";
+
+        assert_eq!(pane_status_from_content(content), SessionStatus::Idle);
+    }
+}

@@ -14,11 +14,12 @@ const TABLE_COLUMN_SPACING: u16 = 1;
 const NUMBER_COLUMN_WIDTH: u16 = 4;
 const SESSION_COLUMN_WIDTH: u16 = 4;
 const DIRECTORY_COLUMN_WIDTH: u16 = 20;
-const STATUS_COLUMN_WIDTH: u16 = 10;
+const STATUS_COLUMN_WIDTH: u16 = 14;
 const MODEL_COLUMN_WIDTH: u16 = 14;
 const CONTEXT_COLUMN_WIDTH: u16 = 14;
 const ACTIVITY_COLUMN_WIDTH: u16 = 14;
 const SESSION_TITLE_SEPARATOR: char = '•';
+const BACKGROUND_TASK_COLOR: Color = Color::Green;
 
 pub fn render(frame: &mut Frame, app: &App) {
     let show_search = app.filter_active || !app.filter_text.is_empty();
@@ -91,12 +92,14 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
             let tmux_name = session.tmux_session.as_deref().unwrap_or("—");
 
             // Status: colored dot + label
-            let (status_dot, status_label, status_color) = match session.status {
-                SessionStatus::New => ("●", "New", Color::Blue),
-                SessionStatus::Working => ("●", "Working", Color::Green),
-                SessionStatus::Idle => ("●", "Idle", dim),
-                SessionStatus::Input => ("●", "Input", Color::Yellow),
+            let (status_dot, status_color) = match session.status {
+                SessionStatus::New => ("●", Color::Blue),
+                SessionStatus::Working => ("●", Color::Green),
+                SessionStatus::Idle => ("●", dim),
+                SessionStatus::Input => ("●", Color::Yellow),
+                SessionStatus::BackgroundTasks(_) => ("●", BACKGROUND_TASK_COLOR),
             };
+            let status_label = session.status.label();
 
             let token_ratio = session.token_ratio();
             let token_style = if token_ratio > 0.9 {
