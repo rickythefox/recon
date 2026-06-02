@@ -1391,13 +1391,15 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
         let window_index = parts[4];
         let pane_index = parts[5];
 
-        // Candidate commands: version number (e.g. "2.1.76"), "claude", "codex", "node"
+        // Candidate commands cover Claude, Codex, Node wrappers, and Claude's macOS
+        // npm binary process name "claude.exe".
         let is_candidate = command
             .chars()
             .next()
             .map(|c| c.is_ascii_digit())
             .unwrap_or(false)
             || command == "claude"
+            || command == "claude.exe"
             || command == "codex"
             || command == "node";
 
