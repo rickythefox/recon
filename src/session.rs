@@ -1188,8 +1188,8 @@ fn determine_status(
 /// Determine status by inspecting the Claude Code TUI pane content.
 ///
 /// Scans the last few non-empty lines bottom-up looking for:
-///   - Working: a line starting with a Unicode spinner (✽✢✳✶⏺) that also
-///     contains "…" — these are thinking/tool-execution progress indicators
+///   - Working: a line starting with a Unicode spinner (✽✢✳✶⏺) that indicates
+///     active thinking/tool execution
 ///   - Input: "Esc to cancel" on the last line, or a selection menu ("❯ N.")
 ///   - Idle: anything else
 fn pane_status(pane_target: &str) -> SessionStatus {
@@ -1226,12 +1226,9 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
             background_tasks = Some(count);
         }
 
-        // Working: line starts with a spinner character and contains "…"
-        // Spinners: ✽(U+273D) ✢(U+2722) ✳(U+2733) ✶(U+2736) ⏺(U+23FA)
-        if let Some(first) = trimmed.chars().next() {
-            if is_spinner(first) && trimmed.contains('\u{2026}') {
-                return SessionStatus::Working;
-            }
+        // Working: Claude uses spinner-prefixed lines for active progress.
+        if is_claude_working_line(trimmed) {
+            return SessionStatus::Working;
         }
 
         // Input: selection-style permission prompts ("❯ N.")
@@ -1267,6 +1264,18 @@ fn background_shell_count(line: &str) -> Option<u32> {
         let label = window[1].trim_matches(|c: char| !c.is_alphanumeric());
         matches!(label, "shell" | "shells").then_some(count)
     })
+}
+
+fn is_claude_working_line(line: &str) -> bool {
+    let Some(first) = line.chars().next() else {
+        return false;
+    };
+
+    if !is_spinner(first) {
+        return false;
+    }
+
+    line.contains('\u{2026}') || line.contains("Running ") && line.contains(" shell command")
 }
 
 /// Check if a character is a Claude Code activity indicator.
@@ -1583,6 +1592,21 @@ mod tests {
 ────────────────────────────────────────────────────────────────
   Opus 4.8 | Ctx Used: 31.0% | .../work
   ⏵⏵ bypass permissions on · 2 shells
+";
+
+        assert_eq!(pane_status_from_content(content), SessionStatus::Working);
+    }
+
+    #[test]
+    fn claude_pane_status_reports_running_shell_command_as_working() {
+        let content = "\
+⏺ Running 1 shell command
+
+────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 31.0% | .../work
+  ⏵⏵ bypass permissions on
 ";
 
         assert_eq!(pane_status_from_content(content), SessionStatus::Working);
