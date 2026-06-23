@@ -1227,22 +1227,26 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
         }
 
         // Working: Claude uses spinner-prefixed lines for active progress.
+        // Scan the full visible pane, not just the footer: a long todo
+        // checklist or output block renders below the spinner line and can
+        // push it many lines above the footer.
         if is_claude_working_line(trimmed) {
             return SessionStatus::Working;
         }
 
-        // Input: selection-style permission prompts ("❯ N.")
-        if let Some(pos) = trimmed.find('\u{276F}') { // ❯
-            let after = trimmed[pos + '\u{276F}'.len_utf8()..].trim_start();
-            if after.starts_with(|c: char| c.is_ascii_digit()) {
-                return SessionStatus::Input;
+        // Input: selection-style permission prompts ("❯ N."). These only
+        // appear at the bottom, so only trust them near the footer to avoid
+        // matching numbered lines in scrolled-back output.
+        if lines_checked < 10 {
+            if let Some(pos) = trimmed.find('\u{276F}') { // ❯
+                let after = trimmed[pos + '\u{276F}'.len_utf8()..].trim_start();
+                if after.starts_with(|c: char| c.is_ascii_digit()) {
+                    return SessionStatus::Input;
+                }
             }
         }
 
         lines_checked += 1;
-        if lines_checked >= 10 {
-            break;
-        }
     }
 
     if let Some(count) = background_tasks {
@@ -1652,6 +1656,29 @@ mod tests {
             pane_status_from_content(content),
             SessionStatus::BackgroundTasks(4)
         );
+    }
+
+    #[test]
+    fn claude_pane_status_detects_working_above_long_todo_list() {
+        // Regression: the spinner line renders above the todo checklist,
+        // input box, statusline, and footer, pushing it past the old
+        // 10-line bottom-up scan window.
+        let content = "\
+✶ Contemplating… (7m 29s · ↓ 31.9k tokens)
+  └ ✔ Build lever_b/dataverse.py Web API helper
+    ✔ Write 01_measure.sql + 02_snapshot_select.sql
+    ✔ Write F-008 export script (02_export_predelete.py)
+    □ Write cleanup/key/rollback scripts (03/04/05)
+    □ Write F-006 runbook README
+
+────────────────────────────────────────────────────────────────
+›
+────────────────────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 19.0% | Block: 2hr 16m | (+45,-13) | .../work /rc
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+";
+
+        assert_eq!(pane_status_from_content(content), SessionStatus::Working);
     }
 
     #[test]
