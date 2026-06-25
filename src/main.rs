@@ -3,6 +3,7 @@ mod cli;
 mod codex;
 mod config;
 mod history;
+mod kitty;
 mod model;
 mod new_session;
 mod park;

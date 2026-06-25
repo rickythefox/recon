@@ -31,6 +31,7 @@ pub struct App {
     last_session_id: Option<String>,      // restored from ~/.config/recon/state.json
     prev_session_id: Option<String>,      // for 'b' to toggle back
     prev_sessions: HashMap<String, Session>,
+    pub shift_enter_zoom: bool,           // kitty maps Shift+Enter -> Ctrl+J (zoom label)
 }
 
 impl App {
@@ -54,6 +55,7 @@ impl App {
             last_session_id: saved.last_session_id,
             prev_session_id: saved.prev_session_id,
             prev_sessions: HashMap::new(),
+            shift_enter_zoom: crate::kitty::shift_enter_sends_ctrl_j(),
         }
     }
 
