@@ -149,9 +149,21 @@ impl App {
 
     /// Switch to the session at the given real index, save state, and quit.
     fn switch_to_session(&mut self, real_idx: usize) {
+        self.switch_to_session_inner(real_idx, false);
+    }
+
+    /// Switch to the session and zoom its tmux pane (if not already zoomed).
+    fn switch_to_session_zoomed(&mut self, real_idx: usize) {
+        self.switch_to_session_inner(real_idx, true);
+    }
+
+    fn switch_to_session_inner(&mut self, real_idx: usize, zoom: bool) {
         if let Some(session) = self.sessions.get(real_idx) {
             if let Some(target) = &session.pane_target {
                 state::save(&session.session_id, self.last_session_id.as_deref());
+                if zoom {
+                    tmux::zoom_pane(target);
+                }
                 tmux::switch_to_pane(target);
                 self.should_quit = true;
             }
@@ -216,6 +228,13 @@ impl App {
                 self.reset_selected_scroll();
             }
             KeyCode::Char('v') => self.view_mode = ViewMode::View,
+            // Ctrl+J (what the terminal's Shift+Enter remap emits): jump to the
+            // pane and zoom it. Must precede the plain 'j' navigation arm.
+            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(real_idx) = self.resolve_selected() {
+                    self.switch_to_session_zoomed(real_idx);
+                }
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 let count = self.filtered_indices().len();
                 if count > 0 {

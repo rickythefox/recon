@@ -17,6 +17,25 @@ pub fn switch_to_pane(target: &str) {
     }
 }
 
+/// Zoom the window containing `target` if it isn't already zoomed.
+/// `resize-pane -Z` toggles zoom, so we first query the window's zoom flag to
+/// avoid un-zooming an already-zoomed window.
+pub fn zoom_pane(target: &str) {
+    // Query whether the target's window is already zoomed (1) or not (0).
+    let zoomed = Command::new("tmux")
+        .args(["display-message", "-p", "-t", target, "#{window_zoomed_flag}"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
+        .unwrap_or(false);
+
+    // Only toggle when not already zoomed.
+    if !zoomed {
+        let _ = Command::new("tmux")
+            .args(["resize-pane", "-Z", "-t", target])
+            .status();
+    }
+}
+
 /// Launch a command in a new tmux session with the given name and working directory.
 /// If `command` is None, runs claude. Otherwise splits the command on whitespace
 /// and passes the parts as the binary + args to tmux (no shell wrapper, so aliases
