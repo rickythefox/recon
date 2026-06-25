@@ -2,6 +2,7 @@ mod app;
 mod cli;
 mod codex;
 mod history;
+mod kitty;
 mod model;
 mod new_session;
 mod park;

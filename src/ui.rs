@@ -356,7 +356,10 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw("/"),
             Span::styled("1-0", Style::default().fg(Color::Cyan)),
             Span::raw(" switch  "),
-            Span::styled("S-Enter", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                if app.shift_enter_zoom { "S-Enter" } else { "C-j" },
+                Style::default().fg(Color::Cyan),
+            ),
             Span::raw(" zoom  "),
             Span::styled("b", Style::default().fg(Color::Cyan)),
             Span::raw(" back  "),
