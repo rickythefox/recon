@@ -1236,11 +1236,14 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
 
         // Input: selection-style permission prompts ("❯ N."). These only
         // appear at the bottom, so only trust them near the footer to avoid
-        // matching numbered lines in scrolled-back output.
+        // matching numbered lines in scrolled-back output. Require the digit
+        // to be followed by a dot ("❯ 1. Yes") so a number typed into the
+        // input box ("❯ 1") isn't misread as a menu selection.
         if lines_checked < 10 {
             if let Some(pos) = trimmed.find('\u{276F}') { // ❯
                 let after = trimmed[pos + '\u{276F}'.len_utf8()..].trim_start();
-                if after.starts_with(|c: char| c.is_ascii_digit()) {
+                let rest = after.trim_start_matches(|c: char| c.is_ascii_digit());
+                if rest.len() < after.len() && rest.starts_with('.') {
                     return SessionStatus::Input;
                 }
             }
@@ -1694,5 +1697,58 @@ mod tests {
 ";
 
         assert_eq!(pane_status_from_content(content), SessionStatus::Idle);
+    }
+
+    #[test]
+    fn claude_pane_status_keeps_working_when_number_typed_in_input_box() {
+        // Regression: a number typed into the input box renders as "❯ 1",
+        // which used to be misread as a selection menu ("❯ N.") and reported
+        // Input even though the agent is actively working above it.
+        let content = "\
+✳ Metamorphosing… (6m 33s · ↓ 20.4k tokens)
+  └ Tip: Use Plan Mode to prepare for a complex request before making changes.
+
+────────────────────────────────────────────────────────────────
+❯ 1
+────────────────────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 14.0% | Block: 1hr 47m | (+0,-0) | .../work /rc
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+";
+
+        assert_eq!(pane_status_from_content(content), SessionStatus::Working);
+    }
+
+    #[test]
+    fn claude_pane_status_idle_when_number_typed_in_input_box_after_done() {
+        // Regression: leftover number in the input box ("❯ 1") must not keep
+        // a finished session pinned to Input.
+        let content = "\
+✳ Sautéed for 7m 43s
+
+────────────────────────────────────────────────────────────────
+❯ 1
+────────────────────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 15.0% | Block: 1hr 48m | (+0,-0) | .../work /rc
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
+";
+
+        assert_eq!(pane_status_from_content(content), SessionStatus::Idle);
+    }
+
+    #[test]
+    fn claude_pane_status_detects_selection_menu_with_dot() {
+        // A genuine selection menu renders the choice as "❯ 1. Yes" - the
+        // digit is followed by a dot. This must still report Input.
+        let content = "\
+Do you want to proceed?
+❯ 1. Yes
+  2. No
+
+────────────────────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 30.0% | .../work
+  ⏵⏵ bypass permissions on
+";
+
+        assert_eq!(pane_status_from_content(content), SessionStatus::Input);
     }
 }
