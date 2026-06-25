@@ -13,7 +13,6 @@ const TABLE_BORDER_WIDTH: u16 = 2;
 const TABLE_COLUMN_SPACING: u16 = 1;
 const NUMBER_COLUMN_WIDTH: u16 = 4;
 const SESSION_COLUMN_WIDTH: u16 = 4;
-const DIRECTORY_COLUMN_WIDTH: u16 = 20;
 const STATUS_COLUMN_WIDTH: u16 = 14;
 const MODEL_COLUMN_WIDTH: u16 = 14;
 const CONTEXT_COLUMN_WIDTH: u16 = 14;
@@ -62,7 +61,6 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
     }
     header_cells.extend([
         Cell::from("Project"),
-        Cell::from("Directory"),
         Cell::from("Status"),
         Cell::from("Model"),
         Cell::from("Context"),
@@ -116,8 +114,6 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 .map(format_timestamp)
                 .unwrap_or_else(|| "—".to_string());
 
-            let cwd_display = shorten_home(&session.cwd);
-
             // Project: repo::relative_dir::branch (session name)
             let project_cell = {
                 let mut spans = vec![Span::raw(&session.project_name)];
@@ -158,9 +154,6 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 ),
             ]));
 
-            // Directory: dimmed
-            let dir_cell = Cell::from(cwd_display).style(Style::default().fg(dim));
-
             let mut cells = vec![Cell::from(num)];
             if show_session_col {
                 cells.push(Cell::from(Span::styled(
@@ -174,7 +167,6 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
             }
             cells.extend([
                 project_cell,
-                dir_cell,
                 status_cell,
                 Cell::from(session.model_display()),
                 Cell::from(session.token_display()).style(token_style),
@@ -198,7 +190,6 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
     }
     widths.extend([
         Constraint::Min(20),                        // Project (repo + branch)
-        Constraint::Length(DIRECTORY_COLUMN_WIDTH), // Directory
         Constraint::Length(STATUS_COLUMN_WIDTH),    // Status
         Constraint::Length(MODEL_COLUMN_WIDTH),     // Model
         Constraint::Length(CONTEXT_COLUMN_WIDTH),   // Context
@@ -219,11 +210,10 @@ fn project_column_width(area_width: u16, show_session_col: bool) -> usize {
     } else {
         0
     };
-    let column_count = if show_session_col { 8 } else { 7 };
+    let column_count = if show_session_col { 7 } else { 6 };
     let fixed_width = TABLE_BORDER_WIDTH
         + NUMBER_COLUMN_WIDTH
         + session_width
-        + DIRECTORY_COLUMN_WIDTH
         + STATUS_COLUMN_WIDTH
         + MODEL_COLUMN_WIDTH
         + CONTEXT_COLUMN_WIDTH
@@ -377,17 +367,6 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     };
     let footer = Paragraph::new(Line::from(spans));
     frame.render_widget(footer, area);
-}
-
-/// Replace home directory prefix with ~.
-fn shorten_home(path: &str) -> String {
-    if let Some(home) = dirs::home_dir() {
-        let home_str = home.to_string_lossy();
-        if let Some(rest) = path.strip_prefix(home_str.as_ref()) {
-            return format!("~{rest}");
-        }
-    }
-    path.to_string()
 }
 
 /// Format an ISO timestamp into a relative or short time string.
