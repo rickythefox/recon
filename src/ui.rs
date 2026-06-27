@@ -15,7 +15,6 @@ const NUMBER_COLUMN_WIDTH: u16 = 4;
 const SESSION_COLUMN_WIDTH: u16 = 4;
 const STATUS_COLUMN_WIDTH: u16 = 11;
 const MODEL_COLUMN_WIDTH: u16 = 11;
-const CONTEXT_COLUMN_WIDTH: u16 = 11;
 const ACTIVITY_COLUMN_WIDTH: u16 = 12;
 const SESSION_TITLE_SEPARATOR: char = '•';
 const BACKGROUND_TASK_COLOR: Color = Color::Green;
@@ -55,15 +54,11 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
     };
     let project_width = project_column_width(area.width, show_session_col);
 
-    let mut header_cells = vec![Cell::from(" # ")];
-    if show_session_col {
-        header_cells.push(Cell::from("Sess"));
-    }
+    let mut header_cells = vec![Cell::from(if show_session_col { " #/S" } else { " # " })];
     header_cells.extend([
         Cell::from("Project"),
         Cell::from("Status"),
-        Cell::from("Model"),
-        Cell::from("Context"),
+        Cell::from("Model/Ctx"),
         Cell::from("Last Activity"),
     ]);
     let header = Row::new(header_cells).style(
@@ -172,22 +167,31 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 ),
             ]));
 
-            let mut cells = vec![Cell::from(num)];
-            if show_session_col {
-                cells.push(Cell::from(Span::styled(
-                    tmux_name.to_string(),
-                    if session.agent == crate::session::AgentKind::Codex {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default()
-                    },
-                )));
-            }
+            // Id column: row number on line 1, tmux session name on line 2
+            let id_cell = if show_session_col {
+                let name_style = if session.agent == crate::session::AgentKind::Codex {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default()
+                };
+                Cell::from(Text::from(vec![
+                    Line::from(num),
+                    Line::from(Span::styled(format!(" {tmux_name}"), name_style)),
+                ]))
+            } else {
+                Cell::from(num)
+            };
+            let mut cells = vec![id_cell];
+            // Model/Context: model on line 1, token usage on line 2
+            let model_cell = Cell::from(Text::from(vec![
+                Line::from(session.model_display()),
+                Line::from(Span::styled(session.token_display(), token_style)),
+            ]));
+
             cells.extend([
                 project_cell,
                 status_cell,
-                Cell::from(session.model_display()),
-                Cell::from(session.token_display()).style(token_style),
+                model_cell,
                 Cell::from(activity),
             ]);
             let row = Row::new(cells).height(2);
@@ -202,15 +206,17 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    let mut widths = vec![Constraint::Length(NUMBER_COLUMN_WIDTH)]; // #
-    if show_session_col {
-        widths.push(Constraint::Length(SESSION_COLUMN_WIDTH)); // Session
-    }
+    // Id column holds the number, plus the session name on line 2 when shown
+    let id_width = if show_session_col {
+        SESSION_COLUMN_WIDTH
+    } else {
+        NUMBER_COLUMN_WIDTH
+    };
+    let mut widths = vec![Constraint::Length(id_width)];
     widths.extend([
         Constraint::Min(20),                        // Project (repo + branch)
         Constraint::Length(STATUS_COLUMN_WIDTH),    // Status
-        Constraint::Length(MODEL_COLUMN_WIDTH),     // Model
-        Constraint::Length(CONTEXT_COLUMN_WIDTH),   // Context
+        Constraint::Length(MODEL_COLUMN_WIDTH),     // Model/Context
         Constraint::Length(ACTIVITY_COLUMN_WIDTH),  // Last Activity
     ]);
 
@@ -223,18 +229,18 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Estimate the rendered Project column width for budgeting the session title.
 fn project_column_width(area_width: u16, show_session_col: bool) -> usize {
-    let session_width = if show_session_col {
+    // Id column width: wider when it also carries the session name on line 2
+    let id_width = if show_session_col {
         SESSION_COLUMN_WIDTH
     } else {
-        0
+        NUMBER_COLUMN_WIDTH
     };
-    let column_count = if show_session_col { 7 } else { 6 };
+    // Columns: id, project, status, model/ctx, activity
+    let column_count = 5;
     let fixed_width = TABLE_BORDER_WIDTH
-        + NUMBER_COLUMN_WIDTH
-        + session_width
+        + id_width
         + STATUS_COLUMN_WIDTH
         + MODEL_COLUMN_WIDTH
-        + CONTEXT_COLUMN_WIDTH
         + ACTIVITY_COLUMN_WIDTH
         + TABLE_COLUMN_SPACING * (column_count - 1);
 
