@@ -130,23 +130,25 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 // Line 2: session title followed by branch
                 let mut line2: Vec<StyledChar> = Vec::new();
                 let has_title = session.session_name.is_some();
+                // Branch is highlighted white on the selected row, magenta otherwise
+                let branch_color = if is_selected {
+                    Color::White
+                } else {
+                    Color::Magenta
+                };
                 if let Some(name) = &session.session_name {
-                    let name_color = if is_selected {
-                        Color::White
-                    } else {
-                        Color::Green
-                    };
-                    push_segment(&mut line2, name, Style::default().fg(name_color));
+                    // Session title stays green even when selected
+                    push_segment(&mut line2, name, Style::default().fg(Color::Green));
                 }
                 if has_title {
                     // With a title present, hide uninteresting default branches
                     if let Some(b) = visible_branch(&session.branch) {
                         push_segment(&mut line2, " ", Style::default());
-                        push_segment(&mut line2, b, Style::default().fg(Color::Magenta));
+                        push_segment(&mut line2, b, Style::default().fg(branch_color));
                     }
                 } else if let Some(b) = &session.branch {
                     // No title: always show the branch, even main/master
-                    push_segment(&mut line2, b, Style::default().fg(Color::Magenta));
+                    push_segment(&mut line2, b, Style::default().fg(branch_color));
                 } else {
                     // No title and no git repo
                     push_segment(&mut line2, "(no repo)", Style::default().fg(dim));
