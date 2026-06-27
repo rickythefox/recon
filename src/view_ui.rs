@@ -603,8 +603,12 @@ fn render_character(
         name_style,
     )));
 
-    // Git branch
-    let branch = session.branch.as_deref().unwrap_or("");
+    // Git branch (hide uninteresting default branches)
+    let branch = session
+        .branch
+        .as_deref()
+        .filter(|b| *b != "main" && *b != "master")
+        .unwrap_or("");
     lines.push(Line::from(Span::styled(
         truncate_str(branch, area.width as usize),
         Style::default().fg(Color::Green),

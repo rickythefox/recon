@@ -115,34 +115,36 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 .unwrap_or_else(|| "—".to_string());
 
             // Project: repo::relative_dir::branch (session name)
+            // Built as a styled-char sequence so the whole column can marquee-scroll.
             let project_cell = {
-                let mut spans = vec![Span::raw(&session.project_name)];
+                let mut content: Vec<StyledChar> = Vec::new();
+                push_segment(&mut content, &session.project_name, Style::default());
                 if let Some(dir) = &session.relative_dir {
-                    spans.push(Span::styled("::", Style::default().fg(dim)));
-                    spans.push(Span::styled(dir.clone(), Style::default().fg(Color::Cyan)));
+                    push_segment(&mut content, "::", Style::default().fg(dim));
+                    push_segment(&mut content, dir, Style::default().fg(Color::Cyan));
                 }
-                if let Some(b) = &session.branch {
-                    spans.push(Span::styled("::", Style::default().fg(dim)));
-                    spans.push(Span::styled(b, Style::default().fg(Color::Green)));
+                // Hide uninteresting default branches (main/master)
+                if let Some(b) = visible_branch(&session.branch) {
+                    push_segment(&mut content, "::", Style::default().fg(dim));
+                    push_segment(&mut content, b, Style::default().fg(Color::Magenta));
                 }
                 if let Some(name) = &session.session_name {
-                    let title_budget = session_title_budget(session, project_width);
                     let name_color = if is_selected {
                         Color::White
                     } else {
-                        Color::Magenta
+                        Color::Green
                     };
-                    if title_budget > 0 {
-                        spans.extend(session_title_spans(
-                            name,
-                            title_budget,
-                            app.selected_scroll_tick(),
-                            name_color,
-                            is_active_row,
-                        ));
-                    }
+                    push_segment(&mut content, " (", Style::default().fg(name_color));
+                    push_segment(&mut content, name, Style::default().fg(name_color));
+                    push_segment(&mut content, ")", Style::default().fg(name_color));
                 }
-                Cell::from(Line::from(spans))
+                let windowed = window_content(
+                    &content,
+                    project_width,
+                    app.selected_scroll_tick(),
+                    is_active_row,
+                );
+                Cell::from(Line::from(group_spans(&windowed)))
             };
 
             // Status: colored dot + label
@@ -223,89 +225,73 @@ fn project_column_width(area_width: u16, show_session_col: bool) -> usize {
     area_width.saturating_sub(fixed_width) as usize
 }
 
-/// Return the number of title characters that can fit after project metadata.
-fn session_title_budget(session: &crate::session::Session, project_width: usize) -> usize {
-    let mut used = display_len(&session.project_name);
-    if let Some(dir) = &session.relative_dir {
-        used += 2 + display_len(dir);
-    }
-    if let Some(branch) = &session.branch {
-        used += 2 + display_len(branch);
-    }
+/// A single rendered character paired with its style, used to scroll the
+/// whole Project column while preserving per-segment colors.
+type StyledChar = (char, Style);
 
-    project_width.saturating_sub(used + 3)
+/// Append each character of `text` to `buf` carrying `style`.
+fn push_segment(buf: &mut Vec<StyledChar>, text: &str, style: Style) {
+    for ch in text.chars() {
+        buf.push((ch, style));
+    }
 }
 
-/// Scroll a session title through a fixed-width viewport.
-fn scroll_session_title(title: &str, width: usize, tick: u64) -> String {
-    if width == 0 {
-        return String::new();
-    }
-
-    let title_chars: Vec<char> = title.chars().collect();
-    if title_chars.len() <= width {
-        return title.to_string();
-    }
-
-    let mut cycle_chars = title_chars;
-    cycle_chars.extend([' ', SESSION_TITLE_SEPARATOR, ' ']);
-    let cycle_len = cycle_chars.len();
-    let start = tick as usize % cycle_len;
-    let mut output = String::new();
-    for offset in 0..width {
-        let pos = (start + offset) % cycle_len;
-        output.push(cycle_chars[pos]);
-    }
-
-    output
+/// Return the branch name unless it is a default branch worth hiding.
+fn visible_branch(branch: &Option<String>) -> Option<&str> {
+    branch
+        .as_deref()
+        .filter(|b| *b != "main" && *b != "master")
 }
 
-/// Build title spans while coloring the loop separator independently.
-fn session_title_spans(
-    title: &str,
+/// Window `content` to `width`, marquee-scrolling the active row when it
+/// overflows and statically clipping every other row.
+fn window_content(
+    content: &[StyledChar],
     width: usize,
     tick: u64,
-    title_color: Color,
     is_active_row: bool,
-) -> Vec<Span<'static>> {
-    let title = session_title_text(title, width, tick, is_active_row);
-    let title_style = Style::default().fg(title_color);
+) -> Vec<StyledChar> {
+    if width == 0 {
+        return Vec::new();
+    }
+    if content.len() <= width {
+        return content.to_vec();
+    }
+    if !is_active_row {
+        return content.iter().take(width).copied().collect();
+    }
+
+    // Loop the content past a styled separator for the active-row marquee.
     let separator_style = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
-    let mut spans = vec![Span::styled(" (", title_style)];
+    let mut cycle = content.to_vec();
+    cycle.push((' ', separator_style));
+    cycle.push((SESSION_TITLE_SEPARATOR, separator_style));
+    cycle.push((' ', separator_style));
+    let cycle_len = cycle.len();
+    let start = tick as usize % cycle_len;
+    (0..width).map(|o| cycle[(start + o) % cycle_len]).collect()
+}
+
+/// Group consecutive same-style characters into spans for rendering.
+fn group_spans(chars: &[StyledChar]) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
     let mut chunk = String::new();
-
-    for ch in title.chars() {
-        if ch == SESSION_TITLE_SEPARATOR {
-            if !chunk.is_empty() {
-                spans.push(Span::styled(std::mem::take(&mut chunk), title_style));
+    let mut chunk_style: Option<Style> = None;
+    for &(ch, style) in chars {
+        if chunk_style != Some(style) {
+            if let Some(s) = chunk_style {
+                spans.push(Span::styled(std::mem::take(&mut chunk), s));
             }
-            spans.push(Span::styled(ch.to_string(), separator_style));
-        } else {
-            chunk.push(ch);
+            chunk_style = Some(style);
         }
+        chunk.push(ch);
     }
-
-    if !chunk.is_empty() {
-        spans.push(Span::styled(chunk, title_style));
+    if let Some(s) = chunk_style {
+        spans.push(Span::styled(chunk, s));
     }
-    spans.push(Span::styled(")", title_style));
     spans
-}
-
-/// Return the active-row marquee text or an inactive static clipped title.
-fn session_title_text(title: &str, width: usize, tick: u64, is_active_row: bool) -> String {
-    if is_active_row {
-        scroll_session_title(title, width, tick)
-    } else {
-        title.chars().take(width).collect()
-    }
-}
-
-/// Count display characters for the ASCII-first labels this UI renders.
-fn display_len(text: &str) -> usize {
-    text.chars().count()
 }
 
 fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -397,28 +383,68 @@ fn format_timestamp(ts: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn session_title_fits_without_scrolling() {
-        assert_eq!(scroll_session_title("short", 8, 42), "short");
+    /// Build a styled-char buffer from plain text for test assertions.
+    fn styled(text: &str) -> Vec<StyledChar> {
+        let mut buf = Vec::new();
+        push_segment(&mut buf, text, Style::default());
+        buf
+    }
+
+    /// Collapse a styled-char buffer back to plain text.
+    fn plain(chars: &[StyledChar]) -> String {
+        chars.iter().map(|(c, _)| *c).collect()
     }
 
     #[test]
-    fn session_title_loops_with_separator_when_over_budget() {
-        assert_eq!(scroll_session_title("abcdef", 4, 0), "abcd");
-        assert_eq!(scroll_session_title("abcdef", 4, 1), "bcde");
-        assert_eq!(scroll_session_title("abcdef", 4, 2), "cdef");
-        assert_eq!(scroll_session_title("abcdefghij", 8, 8), "ij • abc");
+    fn content_fits_without_scrolling() {
+        let content = styled("short");
+        assert_eq!(plain(&window_content(&content, 8, 42, true)), "short");
     }
 
     #[test]
-    fn inactive_session_title_does_not_scroll() {
-        assert_eq!(session_title_text("abcdefghij", 4, 0, false), "abcd");
-        assert_eq!(session_title_text("abcdefghij", 4, 3, false), "abcd");
-        assert_eq!(session_title_text("abcdefghij", 4, 3, true), "defg");
+    fn active_row_loops_with_separator_when_over_width() {
+        let content = styled("abcdef");
+        assert_eq!(plain(&window_content(&content, 4, 0, true)), "abcd");
+        assert_eq!(plain(&window_content(&content, 4, 1, true)), "bcde");
+        assert_eq!(plain(&window_content(&content, 4, 2, true)), "cdef");
+        let long = styled("abcdefghij");
+        assert_eq!(plain(&window_content(&long, 8, 8, true)), "ij • abc");
     }
 
     #[test]
-    fn session_title_handles_zero_width() {
-        assert_eq!(scroll_session_title("abcdef", 0, 3), "");
+    fn inactive_row_does_not_scroll() {
+        let content = styled("abcdefghij");
+        assert_eq!(plain(&window_content(&content, 4, 0, false)), "abcd");
+        assert_eq!(plain(&window_content(&content, 4, 3, false)), "abcd");
+        assert_eq!(plain(&window_content(&content, 4, 3, true)), "defg");
+    }
+
+    #[test]
+    fn window_handles_zero_width() {
+        let content = styled("abcdef");
+        assert!(window_content(&content, 0, 3, true).is_empty());
+    }
+
+    #[test]
+    fn visible_branch_hides_main_and_master() {
+        assert_eq!(visible_branch(&Some("main".to_string())), None);
+        assert_eq!(visible_branch(&Some("master".to_string())), None);
+        assert_eq!(
+            visible_branch(&Some("feature".to_string())),
+            Some("feature")
+        );
+        assert_eq!(visible_branch(&None), None);
+    }
+
+    #[test]
+    fn group_spans_merges_same_style_runs() {
+        let mut buf = Vec::new();
+        push_segment(&mut buf, "ab", Style::default().fg(Color::Cyan));
+        push_segment(&mut buf, "cd", Style::default().fg(Color::Cyan));
+        push_segment(&mut buf, "ef", Style::default().fg(Color::Green));
+        let spans = group_spans(&buf);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content, "abcd");
+        assert_eq!(spans[1].content, "ef");
     }
 }
