@@ -1,7 +1,7 @@
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table},
     Frame,
 };
@@ -114,37 +114,51 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 .map(format_timestamp)
                 .unwrap_or_else(|| "—".to_string());
 
-            // Project: repo::relative_dir::branch (session name)
-            // Built as a styled-char sequence so the whole column can marquee-scroll.
+            // Project spans two lines:
+            //   line 1: repo::relative_dir
+            //   line 2: session title, then branch (if any)
+            // Each line is a styled-char sequence so it can marquee-scroll.
             let project_cell = {
-                let mut content: Vec<StyledChar> = Vec::new();
-                push_segment(&mut content, &session.project_name, Style::default());
+                // Line 1: repo path
+                let mut line1: Vec<StyledChar> = Vec::new();
+                push_segment(&mut line1, &session.project_name, Style::default());
                 if let Some(dir) = &session.relative_dir {
-                    push_segment(&mut content, "::", Style::default().fg(dim));
-                    push_segment(&mut content, dir, Style::default().fg(Color::Cyan));
+                    push_segment(&mut line1, "::", Style::default().fg(dim));
+                    push_segment(&mut line1, dir, Style::default().fg(Color::Cyan));
                 }
-                // Hide uninteresting default branches (main/master)
-                if let Some(b) = visible_branch(&session.branch) {
-                    push_segment(&mut content, "::", Style::default().fg(dim));
-                    push_segment(&mut content, b, Style::default().fg(Color::Magenta));
-                }
+
+                // Line 2: session title followed by branch
+                let mut line2: Vec<StyledChar> = Vec::new();
+                let has_title = session.session_name.is_some();
                 if let Some(name) = &session.session_name {
                     let name_color = if is_selected {
                         Color::White
                     } else {
                         Color::Green
                     };
-                    push_segment(&mut content, " (", Style::default().fg(name_color));
-                    push_segment(&mut content, name, Style::default().fg(name_color));
-                    push_segment(&mut content, ")", Style::default().fg(name_color));
+                    push_segment(&mut line2, name, Style::default().fg(name_color));
                 }
-                let windowed = window_content(
-                    &content,
-                    project_width,
-                    app.selected_scroll_tick(),
-                    is_active_row,
-                );
-                Cell::from(Line::from(group_spans(&windowed)))
+                if has_title {
+                    // With a title present, hide uninteresting default branches
+                    if let Some(b) = visible_branch(&session.branch) {
+                        push_segment(&mut line2, " ", Style::default());
+                        push_segment(&mut line2, b, Style::default().fg(Color::Magenta));
+                    }
+                } else if let Some(b) = &session.branch {
+                    // No title: always show the branch, even main/master
+                    push_segment(&mut line2, b, Style::default().fg(Color::Magenta));
+                } else {
+                    // No title and no git repo
+                    push_segment(&mut line2, "(no repo)", Style::default().fg(dim));
+                }
+
+                let tick = app.selected_scroll_tick();
+                let w1 = window_content(&line1, project_width, tick, is_active_row);
+                let w2 = window_content(&line2, project_width, tick, is_active_row);
+                Cell::from(Text::from(vec![
+                    Line::from(group_spans(&w1)),
+                    Line::from(group_spans(&w2)),
+                ]))
             };
 
             // Status: colored dot + label
@@ -174,7 +188,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 Cell::from(session.token_display()).style(token_style),
                 Cell::from(activity),
             ]);
-            let row = Row::new(cells);
+            let row = Row::new(cells).height(2);
 
             if session.status == SessionStatus::Input {
                 row.style(Style::default().bg(Color::Rgb(50, 40, 0)))
