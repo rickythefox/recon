@@ -1,6 +1,8 @@
 /// Map raw model IDs to human-friendly display names.
 pub fn display_name(model_id: &str) -> &str {
     match model_id {
+        "claude-fable-5" => "Fable 5",
+        "claude-sonnet-5" => "Sonnet 5",
         "claude-opus-4-8" => "Opus 4.8",
         "claude-opus-4-6" => "Opus 4.6",
         "claude-sonnet-4-6" => "Sonnet 4.6",
@@ -28,6 +30,8 @@ pub fn context_window(model_id: &str) -> u64 {
 /// Returns None if the display name is not recognized.
 pub fn id_from_display_name(display: &str) -> Option<&'static str> {
     match display {
+        "Fable 5" => Some("claude-fable-5"),
+        "Sonnet 5" => Some("claude-sonnet-5"),
         "Opus 4.8" | "Opus 4.8 (1M context)" => Some("claude-opus-4-8"),
         "Opus 4.6" | "Opus 4.6 (1M context)" => Some("claude-opus-4-6"),
         "Sonnet 4.6" => Some("claude-sonnet-4-6"),
