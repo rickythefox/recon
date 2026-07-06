@@ -1216,8 +1216,11 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
             continue;
         }
 
-        // Input: permission prompt on the very last non-empty line
-        if lines_checked == 0 && trimmed.contains("Esc to cancel") {
+        // Input: "Esc to cancel" is Claude's live prompt hint. It usually sits
+        // on the last line, but plugins (e.g. agent-deck) render a task-list
+        // panel below the footer, so scan the whole pane. Claude collapses this
+        // hint once the prompt is answered, so a stale match won't persist.
+        if trimmed.contains("Esc to cancel") {
             return SessionStatus::Input;
         }
 
@@ -1747,6 +1750,34 @@ Do you want to proceed?
 ────────────────────────────────────────────────────────────────
   Opus 4.8 | Ctx Used: 30.0% | .../work
   ⏵⏵ bypass permissions on
+";
+
+        assert_eq!(pane_status_from_content(content), SessionStatus::Input);
+    }
+
+    #[test]
+    fn claude_pane_status_detects_input_under_trailing_task_panel() {
+        // Regression: the agent-deck plugin renders a task-list panel below
+        // Claude's prompt footer, pushing "Esc to cancel" several lines above
+        // the bottom. This must still report Input, not Idle.
+        let content = "\
+❯ 1. You advise on rn_pdl
+     You tell me the intended fix.
+  2. I fix both minimally
+  3. Pause after Task 1
+  4. Type something.
+────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+  7 tasks (0 done, 1 in progress, 6 open)
+  ◼ Task 1: Capture table, view, purge, harness wiring (V014)
+  ◻ Task 2: Capture in sp_AddSkillByJobTitle (skill)
+  ◻ Task 3: Capture in sp_AddSkillByLinkedinSkill (workoskill)
+  ◻ Task 4: Capture in sp_Run_JobRole_Assignment (jobrole+scoring)
+  ◻ Task 5: Capture in sp_SetEmploymentJobRoleByTitle (ce grain)
+   … +2 pending
 ";
 
         assert_eq!(pane_status_from_content(content), SessionStatus::Input);
