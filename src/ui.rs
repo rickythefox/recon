@@ -12,6 +12,7 @@ use crate::session::SessionStatus;
 const TABLE_BORDER_WIDTH: u16 = 2;
 const TABLE_COLUMN_SPACING: u16 = 1;
 const NUMBER_COLUMN_WIDTH: u16 = 4;
+const ROW_HEIGHT: u16 = 2;
 const SESSION_COLUMN_WIDTH: u16 = 4;
 const STATUS_COLUMN_WIDTH: u16 = 11;
 const MODEL_COLUMN_WIDTH: u16 = 11;
@@ -194,7 +195,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 model_cell,
                 Cell::from(activity),
             ]);
-            let row = Row::new(cells).height(2);
+            let row = Row::new(cells).height(ROW_HEIGHT);
 
             if session.status == SessionStatus::Input {
                 row.style(Style::default().bg(Color::Rgb(50, 40, 0)))
@@ -220,11 +221,32 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(ACTIVITY_COLUMN_WIDTH),  // Last Activity
     ]);
 
-    let table = Table::new(rows, widths)
+    // Scroll the row window with the cursor when rows overflow the viewport.
+    // Viewport = area minus top/bottom borders (2) and the header line (1),
+    // divided by the per-row height.
+    let capacity = (area.height.saturating_sub(3) / ROW_HEIGHT) as usize;
+    let offset = scroll_offset(app.selected, capacity, rows.len());
+    let visible_rows: Vec<Row> = rows.into_iter().skip(offset).take(capacity.max(1)).collect();
+
+    let table = Table::new(visible_rows, widths)
         .header(header)
         .block(Block::default().borders(Borders::ALL).title(" recon "));
 
     frame.render_widget(table, area);
+}
+
+/// Top row index of the scroll window so the selected row stays visible.
+/// Anchors to the top until the cursor reaches the bottom edge, then scrolls
+/// so the selected row is the last visible one.
+fn scroll_offset(selected: usize, capacity: usize, total: usize) -> usize {
+    if capacity == 0 || total <= capacity {
+        return 0;
+    }
+    if selected < capacity {
+        0
+    } else {
+        (selected + 1 - capacity).min(total - capacity)
+    }
 }
 
 /// Estimate the rendered Project column width for budgeting the session title.
@@ -445,6 +467,23 @@ mod tests {
     fn window_handles_zero_width() {
         let content = styled("abcdef");
         assert!(window_content(&content, 0, 3, true).is_empty());
+    }
+
+    #[test]
+    fn scroll_offset_anchors_top_then_follows_cursor() {
+        // Everything fits: never scroll.
+        assert_eq!(scroll_offset(0, 5, 3), 0);
+        assert_eq!(scroll_offset(2, 5, 3), 0);
+        // Zero capacity (tiny viewport): no offset.
+        assert_eq!(scroll_offset(9, 0, 20), 0);
+        // Overflow, cursor still within first window: stay at top.
+        assert_eq!(scroll_offset(0, 5, 20), 0);
+        assert_eq!(scroll_offset(4, 5, 20), 0);
+        // Cursor past the bottom edge: selected becomes the last visible row.
+        assert_eq!(scroll_offset(5, 5, 20), 1);
+        assert_eq!(scroll_offset(10, 5, 20), 6);
+        // Cursor at the very end: clamp so the last window is full.
+        assert_eq!(scroll_offset(19, 5, 20), 15);
     }
 
     #[test]
