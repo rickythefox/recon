@@ -163,14 +163,15 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 ]))
             };
 
-            // Status: colored dot + label
-            let status_cell = Cell::from(Line::from(vec![
-                Span::styled(status_dot, Style::default().fg(status_color)),
-                Span::styled(
-                    format!(" {status_label}"),
-                    Style::default().fg(status_color),
-                ),
-            ]));
+            // Marquee-scroll long status labels on the active row.
+            let status_chars = status_content(status_dot, status_color, &status_label);
+            let status_window = window_content(
+                &status_chars,
+                STATUS_COLUMN_WIDTH as usize,
+                app.selected_scroll_tick(),
+                is_active_row,
+            );
+            let status_cell = Cell::from(Line::from(group_spans(&status_window)));
 
             // Id column: row number on line 1, tmux session name on line 2
             let id_cell = if show_session_col {
@@ -282,6 +283,16 @@ fn push_segment(buf: &mut Vec<StyledChar>, text: &str, style: Style) {
     for ch in text.chars() {
         buf.push((ch, style));
     }
+}
+
+/// Build styled status content for fixed-width marquee rendering.
+fn status_content(dot: &str, color: Color, label: &str) -> Vec<StyledChar> {
+    let mut content = Vec::new();
+    let style = Style::default().fg(color);
+    push_segment(&mut content, dot, style);
+    push_segment(&mut content, " ", style);
+    push_segment(&mut content, label, style);
+    content
 }
 
 /// Return the branch name unless it is a default branch worth hiding.
@@ -467,6 +478,29 @@ mod tests {
         assert_eq!(plain(&window_content(&content, 4, 0, false)), "abcd");
         assert_eq!(plain(&window_content(&content, 4, 3, false)), "abcd");
         assert_eq!(plain(&window_content(&content, 4, 3, true)), "defg");
+    }
+
+    #[test]
+    fn selected_status_scrolls_to_reveal_full_label() {
+        let content = status_content("●", Color::Red, "Queued 1:10");
+        assert_eq!(
+            plain(&window_content(
+                &content,
+                STATUS_COLUMN_WIDTH as usize,
+                0,
+                true,
+            )),
+            "● Queued 1:"
+        );
+        assert_eq!(
+            plain(&window_content(
+                &content,
+                STATUS_COLUMN_WIDTH as usize,
+                2,
+                true,
+            )),
+            "Queued 1:10"
+        );
     }
 
     #[test]
