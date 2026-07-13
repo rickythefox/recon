@@ -20,6 +20,7 @@ impl SessionLimit {
         format!("{hour}:{:02}", self.reset_time.minute())
     }
 
+    #[cfg(test)]
     pub fn seconds_until(&self, now: DateTime<Utc>) -> u64 {
         // An expired deadline should continue immediately instead of producing a negative sleep.
         (self.reset_at - now).num_seconds().max(0) as u64

@@ -1340,6 +1340,7 @@ fn pane_status(
     pane_status_from_content_at(&content, reference, scheduled_continue_at)
 }
 
+#[cfg(test)]
 fn pane_status_from_content(content: &str) -> SessionStatus {
     pane_status_from_content_at(content, Utc::now(), None)
 }

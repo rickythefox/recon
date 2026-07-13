@@ -685,9 +685,7 @@ mod tests {
         // Keep action tests independent from the wall clock.
         crate::session_limit::parse_session_limit(
             "You've hit your session limit · resets 1:10am (Asia/Nicosia)",
-            chrono::Utc
-                .with_ymd_and_hms(2026, 7, 13, 20, 0, 0)
-                .unwrap(),
+            chrono::Utc.with_ymd_and_hms(2026, 7, 13, 20, 0, 0).unwrap(),
         )
         .unwrap()
     }
