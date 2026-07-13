@@ -76,6 +76,7 @@ pub enum SessionStatus {
     Idle,
     Input,
     BackgroundTasks(u32),
+    BackgroundAgents(u32),
 }
 
 impl SessionStatus {
@@ -87,6 +88,8 @@ impl SessionStatus {
             SessionStatus::Input => "Input".to_string(),
             SessionStatus::BackgroundTasks(1) => "1 task".to_string(),
             SessionStatus::BackgroundTasks(count) => format!("{count} tasks"),
+            SessionStatus::BackgroundAgents(1) => "1 agent".to_string(),
+            SessionStatus::BackgroundAgents(count) => format!("{count} agents"),
         }
     }
 }
@@ -1209,6 +1212,7 @@ fn pane_status(pane_target: &str) -> SessionStatus {
 fn pane_status_from_content(content: &str) -> SessionStatus {
     let mut lines_checked = 0;
     let mut background_tasks = None;
+    let mut background_agents = None;
     // Tracks whether the line physically below the current one was a wrapped
     // continuation carrying the "…" ellipsis. In a narrow pane Claude's active
     // spinner line ("✽ Task 1: … @CorrelationId…") wraps, landing the spinner on
@@ -1236,6 +1240,13 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
         // Background shell tasks are surfaced in Claude's status footer.
         if let Some(count) = background_shell_count(trimmed) {
             background_tasks = Some(count);
+        }
+
+        // Claude shows "Waiting for N background agent(s) to finish" (spinner
+        // line, no ellipsis) while the main loop is blocked on a spawned
+        // subagent. This isn't Idle - the session is actively waiting on work.
+        if let Some(count) = background_agent_count(trimmed) {
+            background_agents = Some(count);
         }
 
         // Working: Claude uses spinner-prefixed lines for active progress.
@@ -1268,6 +1279,11 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
         continuation_has_ellipsis = trimmed.contains('\u{2026}') && !is_spinner_line(trimmed);
     }
 
+    // Waiting on a subagent is a more specific signal than background shells.
+    if let Some(count) = background_agents {
+        return SessionStatus::BackgroundAgents(count);
+    }
+
     if let Some(count) = background_tasks {
         return SessionStatus::BackgroundTasks(count);
     }
@@ -1287,6 +1303,16 @@ fn background_shell_count(line: &str) -> Option<u32> {
         let label = window[1].trim_matches(|c: char| !c.is_alphanumeric());
         matches!(label, "shell" | "shells").then_some(count)
     })
+}
+
+/// Parse the count from Claude's "Waiting for N background agent(s) to finish"
+/// line, tolerating a leading spinner char and the singular/plural wording.
+fn background_agent_count(line: &str) -> Option<u32> {
+    let rest = line.split("Waiting for ").nth(1)?;
+    if !rest.contains("background agent") {
+        return None;
+    }
+    rest.split_whitespace().next()?.parse().ok()
 }
 
 fn is_claude_working_line(line: &str, continuation_has_ellipsis: bool) -> bool {
@@ -1735,6 +1761,47 @@ mod tests {
 ";
 
         assert_eq!(pane_status_from_content(content), SessionStatus::Working);
+    }
+
+    #[test]
+    fn claude_pane_status_reports_waiting_background_agent() {
+        // Claude blocks the main loop on a spawned subagent with a spinner line
+        // "✻ Waiting for 1 background agent to finish" - no ellipsis, so it isn't
+        // a working line, but the session is not Idle either.
+        let content = "\
+⏺ Resumed successfully with foreground-only instructions.
+
+✻ Waiting for 1 background agent to finish
+
+──────────────────────────────────────── Validate WDP bug report points ──
+❯ did it finish?
+──────────────────────────────────────────────────────────────────────────
+  Fable 5 | Ctx Used: 54.0% | Block: 1hr 59m | (+0,-0) | .../fabric   /rc
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+";
+
+        assert_eq!(
+            pane_status_from_content(content),
+            SessionStatus::BackgroundAgents(1)
+        );
+    }
+
+    #[test]
+    fn claude_pane_status_reports_plural_background_agents() {
+        let content = "\
+✻ Waiting for 3 background agents to finish
+
+────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 20.0% | .../work
+  ⏵⏵ bypass permissions on · ← for agents
+";
+
+        assert_eq!(
+            pane_status_from_content(content),
+            SessionStatus::BackgroundAgents(3)
+        );
     }
 
     #[test]
