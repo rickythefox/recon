@@ -1,6 +1,10 @@
 use std::process::Command;
 
+use chrono::{DateTime, Utc};
+
 use crate::session;
+
+const CONTINUE_OPTION: &str = "@recon_continue_at";
 
 /// Switch to a tmux pane (inside tmux) or attach to its session (outside tmux).
 /// `target` is a pane target like "mywork:0.0" (session:window.pane).
@@ -204,6 +208,89 @@ fn which_codex() -> Option<String> {
     if path.is_empty() { None } else { Some(path) }
 }
 
+/// Schedule one literal `continue` and Enter in a tmux-owned background job.
+pub fn schedule_continue(pane_id: &str, reset_at: DateTime<Utc>) -> Result<(), String> {
+    // Refuse any target that could alter the generated shell command.
+    if !validate_pane_id(pane_id) {
+        return Err(format!("Invalid tmux pane ID: {pane_id}"));
+    }
+
+    // Treat the same deadline as an idempotent request and reject conflicts.
+    let timestamp = reset_at.timestamp().to_string();
+    let existing = Command::new("tmux")
+        .args(["show-options", "-p", "-v", "-t", pane_id, CONTINUE_OPTION])
+        .output()
+        .map_err(|error| format!("Failed to inspect scheduled continuation: {error}"))?;
+    if existing.status.success() {
+        let existing = String::from_utf8_lossy(&existing.stdout).trim().to_string();
+        if existing == timestamp {
+            return Ok(());
+        }
+        if !existing.is_empty() {
+            return Err(format!(
+                "Pane already has a different scheduled continuation: {existing}"
+            ));
+        }
+    }
+
+    // Persist the deadline on the pane before launching the background job.
+    let set_option = Command::new("tmux")
+        .args([
+            "set-option",
+            "-p",
+            "-t",
+            pane_id,
+            CONTINUE_OPTION,
+            &timestamp,
+        ])
+        .output()
+        .map_err(|error| format!("Failed to mark scheduled continuation: {error}"))?;
+    if !set_option.status.success() {
+        return Err("tmux set-option failed".to_string());
+    }
+
+    // Delegate the wait to tmux so it survives recon exiting.
+    let delay = (reset_at - Utc::now()).num_seconds().max(0) as u64;
+    let command = scheduled_continue_command(pane_id, delay);
+    let run_shell = match Command::new("tmux")
+        .args(["run-shell", "-b", "-t", pane_id, &command])
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            clear_scheduled_continue(pane_id);
+            return Err(format!("Failed to schedule continuation: {error}"));
+        }
+    };
+    if !run_shell.status.success() {
+        clear_scheduled_continue(pane_id);
+        return Err("tmux run-shell failed".to_string());
+    }
+
+    Ok(())
+}
+
+fn validate_pane_id(pane_id: &str) -> bool {
+    // Tmux pane IDs are an immutable percent sign followed by decimal digits.
+    pane_id.strip_prefix('%').is_some_and(|digits| {
+        !digits.is_empty() && digits.chars().all(|char| char.is_ascii_digit())
+    })
+}
+
+fn scheduled_continue_command(pane_id: &str, delay: u64) -> String {
+    // Verify the pane still exists, send literal text, send Enter, then clear the marker.
+    format!(
+        "sleep {delay}; if tmux display-message -p -t {pane_id} '#{{pane_id}}' >/dev/null 2>&1; then tmux send-keys -t {pane_id} -l continue; tmux send-keys -t {pane_id} Enter; fi; tmux set-option -p -u -t {pane_id} {CONTINUE_OPTION} 2>/dev/null || true"
+    )
+}
+
+fn clear_scheduled_continue(pane_id: &str) {
+    // Best-effort cleanup restores Limit status after a scheduling failure.
+    let _ = Command::new("tmux")
+        .args(["set-option", "-p", "-u", "-t", pane_id, CONTINUE_OPTION])
+        .output();
+}
+
 /// Kill a tmux session by name.
 pub fn kill_session(name: &str) -> bool {
     Command::new("tmux")
@@ -240,6 +327,24 @@ fn sanitize_session_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validates_immutable_pane_ids() {
+        // Only tmux's percent-prefixed numeric pane IDs are safe to interpolate.
+        assert!(validate_pane_id("%42"));
+        assert!(!validate_pane_id("W:1.0"));
+        assert!(!validate_pane_id("%42; touch /tmp/pwned"));
+        assert!(!validate_pane_id("%"));
+    }
+
+    #[test]
+    fn scheduled_continue_command_sends_literal_text_then_enter() {
+        // Literal mode prevents tmux from interpreting continue as a key name.
+        assert_eq!(
+            scheduled_continue_command("%42", 90),
+            "sleep 90; if tmux display-message -p -t %42 '#{pane_id}' >/dev/null 2>&1; then tmux send-keys -t %42 -l continue; tmux send-keys -t %42 Enter; fi; tmux set-option -p -u -t %42 @recon_continue_at 2>/dev/null || true"
+        );
+    }
 
     #[test]
     fn sanitize_normal_name() {
