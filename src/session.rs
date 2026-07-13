@@ -1401,7 +1401,9 @@ fn pane_status_from_content_at(
         // Scan the full visible pane, not just the footer: a long todo
         // checklist or output block renders below the spinner line and can
         // push it many lines above the footer.
-        if is_claude_working_line(trimmed, continuation_has_ellipsis) {
+        if session_limit.is_none()
+            && is_claude_working_line(trimmed, continuation_has_ellipsis)
+        {
             is_working = true;
         }
 
@@ -1862,16 +1864,40 @@ mod tests {
 
     #[test]
     fn active_working_signal_overrides_stale_session_limit() {
-        // Once Claude resumes, a visible historical limit marker must not win.
+        // Once Claude resumes, a newer working line below historical limit text wins.
         let reference = Utc.with_ymd_and_hms(2026, 7, 13, 20, 0, 0).unwrap();
         let content = "\
-✽ Continuing implementation…
 ⎿  You've hit your session limit · resets 1:10am (Asia/Nicosia)
+✽ Continuing implementation…
 ";
 
         assert_eq!(
             pane_status_from_content_at(content, reference, None),
             SessionStatus::Working
+        );
+    }
+
+    #[test]
+    fn session_limit_overrides_older_agent_spinner() {
+        // Regression: a child status ellipsis made the older Agent line look active.
+        let reference = Utc.with_ymd_and_hms(2026, 7, 13, 20, 0, 0).unwrap();
+        let content = "\
+⏺ Agent(Review Task 5: orchestrator) Sonnet 5
+  ⎿  Initializing…
+  ⎿  Error: Agent terminated early due to an API error: You've hit your session limit · resets 1:10am
+     (Asia/Nicosia)
+  ⎿  You've hit your session limit · resets 1:10am (Asia/Nicosia)
+     /upgrade to increase your usage limit.
+
+✻ Baked for 18m 40s
+────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────
+";
+
+        assert_eq!(
+            pane_status_from_content_at(content, reference, None).label(),
+            "Limit 1:10"
         );
     }
 
