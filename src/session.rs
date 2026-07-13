@@ -1209,10 +1209,19 @@ fn pane_status(pane_target: &str) -> SessionStatus {
 fn pane_status_from_content(content: &str) -> SessionStatus {
     let mut lines_checked = 0;
     let mut background_tasks = None;
+    // Tracks whether the line physically below the current one was a wrapped
+    // continuation carrying the "…" ellipsis. In a narrow pane Claude's active
+    // spinner line ("✽ Task 1: … @CorrelationId…") wraps, landing the spinner on
+    // one captured line and the ellipsis on the next. Iterating bottom-up, that
+    // continuation is seen one step before the spinner line, so remember it.
+    let mut continuation_has_ellipsis = false;
 
     for line in content.lines().rev() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
+            // A blank line breaks adjacency: the next spinner line above it has
+            // no wrapped continuation directly below.
+            continuation_has_ellipsis = false;
             continue;
         }
 
@@ -1233,7 +1242,7 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
         // Scan the full visible pane, not just the footer: a long todo
         // checklist or output block renders below the spinner line and can
         // push it many lines above the footer.
-        if is_claude_working_line(trimmed) {
+        if is_claude_working_line(trimmed, continuation_has_ellipsis) {
             return SessionStatus::Working;
         }
 
@@ -1253,6 +1262,10 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
         }
 
         lines_checked += 1;
+
+        // Record whether this (non-spinner) line is a wrapped continuation
+        // carrying the ellipsis, for the spinner line that sits above it.
+        continuation_has_ellipsis = trimmed.contains('\u{2026}') && !is_spinner_line(trimmed);
     }
 
     if let Some(count) = background_tasks {
@@ -1276,16 +1289,21 @@ fn background_shell_count(line: &str) -> Option<u32> {
     })
 }
 
-fn is_claude_working_line(line: &str) -> bool {
-    let Some(first) = line.chars().next() else {
-        return false;
-    };
-
-    if !is_spinner(first) {
+fn is_claude_working_line(line: &str, continuation_has_ellipsis: bool) -> bool {
+    if !is_spinner_line(line) {
         return false;
     }
 
-    line.contains('\u{2026}') || line.contains("Running ") && line.contains(" shell command")
+    // The "…" that marks an in-progress action may sit on this line, or - when a
+    // narrow pane wraps it - on the continuation line directly below.
+    line.contains('\u{2026}')
+        || continuation_has_ellipsis
+        || line.contains("Running ") && line.contains(" shell command")
+}
+
+/// True if the line begins with a Claude activity spinner character.
+fn is_spinner_line(line: &str) -> bool {
+    line.chars().next().is_some_and(is_spinner)
 }
 
 /// Check if a character is a Claude Code activity indicator.
@@ -1682,6 +1700,38 @@ mod tests {
 ────────────────────────────────────────────────────────────────
   Opus 4.8 | Ctx Used: 19.0% | Block: 2hr 16m | (+45,-13) | .../work /rc
   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+";
+
+        assert_eq!(pane_status_from_content(content), SessionStatus::Working);
+    }
+
+    #[test]
+    fn claude_pane_status_detects_working_when_narrow_pane_wraps_spinner_line() {
+        // Regression: in a narrow (35-col) split pane, the active spinner line
+        // "✽ Task 1: … @CorrelationId…" wraps, landing the spinner on one
+        // captured line and the trailing "…" on the next. Neither half alone
+        // satisfied the spinner+ellipsis check, so a working session read Idle.
+        let content = "\
+     Running…
+     … +15 tool uses
+     (ctrl+b ctrl+b (twice) to run
+     in background)
+
+✽ Task 1: V024 MergeLog fix + drop
+  applock + @CorrelationId…
+
+  ⎿  ◼ Task 1: V024 MergeL…
+     ◻ Task 2: Error-path …
+
+───────────────────────────────────
+❯
+───────────────────────────────────
+  Fable 5 | Ctx Used: 42...
+  ⏵⏵ bypass permissions on  · ← f…
+
+  ⏺ main
+  ◯ artifact-writer
+  ◯ general-purpose 3m 7s · ↓ 76.1k
 ";
 
         assert_eq!(pane_status_from_content(content), SessionStatus::Working);
