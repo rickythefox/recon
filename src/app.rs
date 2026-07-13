@@ -614,6 +614,7 @@ mod tests {
             tmux_session: Some(format!("tmux-{id}")),
             tmux_window: None,
             pane_target: None,
+            pane_id: None,
             model: None,
             total_input_tokens: 0,
             total_output_tokens: 0,

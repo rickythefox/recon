@@ -93,6 +93,9 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 SessionStatus::Input => ("●", Color::Yellow),
                 SessionStatus::BackgroundTasks(_) => ("●", BACKGROUND_TASK_COLOR),
                 SessionStatus::BackgroundAgents(_) => ("●", BACKGROUND_TASK_COLOR),
+                SessionStatus::Limited(_) | SessionStatus::ContinueScheduled(_) => {
+                    ("●", Color::Red)
+                }
             };
             let status_label = session.status.label();
 

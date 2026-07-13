@@ -195,6 +195,9 @@ fn sprite_data(status: &SessionStatus, frame: usize) -> (&'static Sprite, Palett
         SessionStatus::Input => (&SPRITE_INPUT[frame % 3], PAL_INPUT),
         SessionStatus::BackgroundTasks(_) => (&SPRITE_WORKING[frame % 3], PAL_WORKING),
         SessionStatus::BackgroundAgents(_) => (&SPRITE_WORKING[frame % 3], PAL_WORKING),
+        SessionStatus::Limited(_) | SessionStatus::ContinueScheduled(_) => {
+            (&SPRITE_INPUT[0], PAL_INPUT)
+        }
     }
 }
 
@@ -327,6 +330,7 @@ fn status_color(status: &SessionStatus) -> Color {
         SessionStatus::Input => Color::Yellow,
         SessionStatus::BackgroundTasks(_) => BACKGROUND_TASK_COLOR,
         SessionStatus::BackgroundAgents(_) => BACKGROUND_TASK_COLOR,
+        SessionStatus::Limited(_) | SessionStatus::ContinueScheduled(_) => Color::Red,
     }
 }
 
@@ -718,6 +722,7 @@ mod tests {
             tmux_session: None,
             tmux_window: None,
             pane_target: None,
+            pane_id: None,
             model: None,
             effort: None,
             total_input_tokens: 0,

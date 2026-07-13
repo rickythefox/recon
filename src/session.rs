@@ -4,9 +4,11 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::model;
+use crate::session_limit::{parse_session_limit, SessionLimit};
 
 /// Maximum bytes per JSONL line before discarding.
 /// Prevents OOM from malicious files with unbounded lines.
@@ -77,6 +79,8 @@ pub enum SessionStatus {
     Input,
     BackgroundTasks(u32),
     BackgroundAgents(u32),
+    Limited(SessionLimit),
+    ContinueScheduled(SessionLimit),
 }
 
 impl SessionStatus {
@@ -90,6 +94,10 @@ impl SessionStatus {
             SessionStatus::BackgroundTasks(count) => format!("{count} tasks"),
             SessionStatus::BackgroundAgents(1) => "1 agent".to_string(),
             SessionStatus::BackgroundAgents(count) => format!("{count} agents"),
+            SessionStatus::Limited(limit) => format!("Limit {}", limit.label_time()),
+            SessionStatus::ContinueScheduled(limit) => {
+                format!("Queued {}", limit.label_time())
+            }
         }
     }
 }
@@ -110,6 +118,7 @@ pub struct Session {
     pub tmux_session: Option<String>,
     pub tmux_window: Option<String>,
     pub pane_target: Option<String>,
+    pub pane_id: Option<String>,
     pub model: Option<String>,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
@@ -299,6 +308,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 info.input_tokens,
                 info.output_tokens,
                 Some(&live.pane_target),
+                live.scheduled_continue_at,
                 &live.agent,
             );
 
@@ -314,6 +324,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 tmux_session: Some(live.tmux_session.clone()),
                 tmux_window: Some(live.tmux_window.clone()),
                 pane_target: Some(live.pane_target.clone()),
+                pane_id: Some(live.pane_id.clone()),
                 model: info.model,
                 effort: info.effort,
                 total_input_tokens: info.input_tokens,
@@ -405,6 +416,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 info.input_tokens,
                 info.output_tokens,
                 Some(&live.pane_target),
+                live.scheduled_continue_at,
                 &live.agent,
             );
 
@@ -418,6 +430,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 tmux_session: Some(live.tmux_session.clone()),
                 tmux_window: Some(live.tmux_window.clone()),
                 pane_target: Some(live.pane_target.clone()),
+                pane_id: Some(live.pane_id.clone()),
                 model: info.model,
                 effort: info.effort,
                 total_input_tokens: info.input_tokens,
@@ -446,6 +459,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 tmux_session: Some(live.tmux_session.clone()),
                 tmux_window: Some(live.tmux_window.clone()),
                 pane_target: Some(live.pane_target.clone()),
+                pane_id: Some(live.pane_id.clone()),
                 model: None,
                 effort: None,
                 total_input_tokens: 0,
@@ -493,6 +507,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
             input_tokens,
             0,
             Some(&live.pane_target),
+            live.scheduled_continue_at,
             &AgentKind::Codex,
         );
 
@@ -508,6 +523,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
             tmux_session: Some(live.tmux_session.clone()),
             tmux_window: Some(live.tmux_window.clone()),
             pane_target: Some(live.pane_target.clone()),
+            pane_id: Some(live.pane_id.clone()),
             model: meta.as_ref().and_then(|m| m.model.clone()),
             effort: meta.as_ref().and_then(|m| m.effort.clone()),
             total_input_tokens: input_tokens,
@@ -550,6 +566,8 @@ struct LiveSessionInfo {
     tmux_session: String,
     tmux_window: String,
     pane_target: String,
+    pane_id: String,
+    scheduled_continue_at: Option<i64>,
     pane_cwd: String,
     started_at: u64,
     agent: AgentKind,
@@ -577,6 +595,8 @@ fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
                             tmux_session: pane.tmux_session,
                             tmux_window: pane.tmux_window,
                             pane_target: pane.pane_target,
+                            pane_id: pane.pane_id,
+                            scheduled_continue_at: pane.scheduled_continue_at,
                             pane_cwd: pane.pane_cwd,
                             started_at: info.started_at,
                             agent: AgentKind::Claude,
@@ -593,6 +613,8 @@ fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
                             tmux_session: pane.tmux_session,
                             tmux_window: pane.tmux_window,
                             pane_target: pane.pane_target,
+                            pane_id: pane.pane_id,
+                            scheduled_continue_at: pane.scheduled_continue_at,
                             pane_cwd: pane.pane_cwd,
                             started_at: 0,
                             agent: AgentKind::Claude,
@@ -614,6 +636,8 @@ fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
                             tmux_session: pane.tmux_session,
                             tmux_window: pane.tmux_window,
                             pane_target: pane.pane_target,
+                            pane_id: pane.pane_id,
+                            scheduled_continue_at: pane.scheduled_continue_at,
                             pane_cwd: pane.pane_cwd,
                             started_at,
                             agent: AgentKind::Codex,
@@ -1248,16 +1272,23 @@ pub fn find_session_cwd(session_id: &str) -> Option<String> {
 /// - Input: last activity within 10 minutes (active conversation, waiting for user)
 /// - Idle: last activity older than 10 minutes
 fn determine_status(
-    _path: &Path,
+    path: &Path,
     input_tokens: u64,
     output_tokens: u64,
     pane_target: Option<&str>,
+    scheduled_continue_at: Option<i64>,
     agent: &AgentKind,
 ) -> SessionStatus {
     // tmux pane content is the source of truth for active sessions
     if let Some(target) = pane_target {
+        // Anchor clock-only reset text to the timestamp of the rate-limit event.
+        let reference = path
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .map(DateTime::<Utc>::from)
+            .unwrap_or_else(|_| Utc::now());
         let pane = match agent {
-            AgentKind::Claude => pane_status(target),
+            AgentKind::Claude => pane_status(target, reference, scheduled_continue_at),
             AgentKind::Codex => crate::codex::codex_pane_status(target),
         };
         // Only show New if pane also looks idle (no active streaming)
@@ -1281,7 +1312,11 @@ fn determine_status(
 ///     active thinking/tool execution
 ///   - Input: "Esc to cancel" on the last line, or a selection menu ("❯ N.")
 ///   - Idle: anything else
-fn pane_status(pane_target: &str) -> SessionStatus {
+fn pane_status(
+    pane_target: &str,
+    reference: DateTime<Utc>,
+    scheduled_continue_at: Option<i64>,
+) -> SessionStatus {
     let output = match std::process::Command::new("tmux")
         .args(["capture-pane", "-t", pane_target, "-p"])
         .output()
@@ -1292,13 +1327,24 @@ fn pane_status(pane_target: &str) -> SessionStatus {
 
     let content = String::from_utf8_lossy(&output.stdout);
 
-    pane_status_from_content(&content)
+    pane_status_from_content_at(&content, reference, scheduled_continue_at)
 }
 
 fn pane_status_from_content(content: &str) -> SessionStatus {
+    pane_status_from_content_at(content, Utc::now(), None)
+}
+
+fn pane_status_from_content_at(
+    content: &str,
+    reference: DateTime<Utc>,
+    scheduled_continue_at: Option<i64>,
+) -> SessionStatus {
     let mut lines_checked = 0;
     let mut background_tasks = None;
     let mut background_agents = None;
+    let mut session_limit = None;
+    let mut needs_input = false;
+    let mut is_working = false;
     // Tracks whether the line physically below the current one was a wrapped
     // continuation carrying the "…" ellipsis. In a narrow pane Claude's active
     // spinner line ("✽ Task 1: … @CorrelationId…") wraps, landing the spinner on
@@ -1320,7 +1366,12 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
         // panel below the footer, so scan the whole pane. Claude collapses this
         // hint once the prompt is answered, so a stale match won't persist.
         if trimmed.contains("Esc to cancel") {
-            return SessionStatus::Input;
+            needs_input = true;
+        }
+
+        // Preserve the newest visible session-limit marker while scanning bottom-up.
+        if session_limit.is_none() {
+            session_limit = parse_session_limit(trimmed, reference);
         }
 
         // Background shell tasks are surfaced in Claude's status footer.
@@ -1340,7 +1391,7 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
         // checklist or output block renders below the spinner line and can
         // push it many lines above the footer.
         if is_claude_working_line(trimmed, continuation_has_ellipsis) {
-            return SessionStatus::Working;
+            is_working = true;
         }
 
         // Input: selection-style permission prompts ("❯ N."). These only
@@ -1353,7 +1404,7 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
                 let after = trimmed[pos + '\u{276F}'.len_utf8()..].trim_start();
                 let rest = after.trim_start_matches(|c: char| c.is_ascii_digit());
                 if rest.len() < after.len() && rest.starts_with('.') {
-                    return SessionStatus::Input;
+                    needs_input = true;
                 }
             }
         }
@@ -1363,6 +1414,23 @@ fn pane_status_from_content(content: &str) -> SessionStatus {
         // Record whether this (non-spinner) line is a wrapped continuation
         // carrying the ellipsis, for the spinner line that sits above it.
         continuation_has_ellipsis = trimmed.contains('\u{2026}') && !is_spinner_line(trimmed);
+    }
+
+    // Current interaction signals override historical pane content.
+    if needs_input {
+        return SessionStatus::Input;
+    }
+
+    if is_working {
+        return SessionStatus::Working;
+    }
+
+    // A matching pane option confirms that this exact reset has been scheduled.
+    if let Some(limit) = session_limit {
+        if scheduled_continue_at == Some(limit.reset_at.timestamp()) {
+            return SessionStatus::ContinueScheduled(limit);
+        }
+        return SessionStatus::Limited(limit);
     }
 
     // Waiting on a subagent is a more specific signal than background shells.
@@ -1476,12 +1544,47 @@ fn read_pid_session_map() -> HashMap<i32, SessionFileInfo> {
     map
 }
 
+/// Raw fields emitted by the single tmux list-panes call.
+struct TmuxPaneRow<'a> {
+    pid: i32,
+    session_name: &'a str,
+    command: &'a str,
+    pane_path: &'a str,
+    window_index: &'a str,
+    pane_index: &'a str,
+    window_name: &'a str,
+    pane_id: &'a str,
+    scheduled_continue_at: Option<i64>,
+}
+
+fn parse_tmux_pane_row(line: &str) -> Option<TmuxPaneRow<'_>> {
+    // Preserve an empty final option field while requiring the complete tmux format.
+    let parts: Vec<&str> = line.splitn(9, "|||").collect();
+    if parts.len() != 9 {
+        return None;
+    }
+
+    Some(TmuxPaneRow {
+        pid: parts[0].parse().ok()?,
+        session_name: parts[1],
+        command: parts[2],
+        pane_path: parts[3],
+        window_index: parts[4],
+        pane_index: parts[5],
+        window_name: parts[6],
+        pane_id: parts[7],
+        scheduled_continue_at: parts[8].parse().ok(),
+    })
+}
+
 /// A discovered tmux pane running a code agent (Claude or Codex).
 struct DiscoveredPane {
     pid: i32,
     tmux_session: String,
     tmux_window: String,
     pane_target: String,
+    pane_id: String,
+    scheduled_continue_at: Option<i64>,
     pane_cwd: String,
     agent: AgentKind,
     codex_session_id: Option<String>,
@@ -1494,7 +1597,7 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
             "list-panes",
             "-a",
             "-F",
-            "#{pane_pid}|||#{session_name}|||#{pane_current_command}|||#{pane_current_path}|||#{window_index}|||#{pane_index}|||#{window_name}",
+            "#{pane_pid}|||#{session_name}|||#{pane_current_command}|||#{pane_current_path}|||#{window_index}|||#{pane_index}|||#{window_name}|||#{pane_id}|||#{@recon_continue_at}",
         ])
         .output()
     {
@@ -1517,20 +1620,16 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
         .unwrap_or_default();
 
     for line in stdout.lines() {
-        let parts: Vec<&str> = line.splitn(7, "|||").collect();
-        if parts.len() < 7 {
-            continue;
-        }
-        let pid: i32 = match parts[0].parse() {
-            Ok(p) => p,
-            Err(_) => continue,
+        // Reject partial rows instead of guessing positional fields.
+        let row = match parse_tmux_pane_row(line) {
+            Some(row) => row,
+            None => continue,
         };
-        let session_name = parts[1];
-        let command = parts[2];
-        let pane_path = parts[3];
-        let window_index = parts[4];
-        let pane_index = parts[5];
-        let window_name = parts[6];
+        let pid = row.pid;
+        let session_name = row.session_name;
+        let command = row.command;
+        let pane_path = row.pane_path;
+        let window_name = row.window_name;
 
         // Candidate commands: version number (e.g. "2.1.76"), "claude", "claude.exe",
         // "codex", or "node". On macOS, the npm-distributed binary's internal process
@@ -1551,7 +1650,7 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
             continue;
         }
 
-        let pane_target = format!("{session_name}:{window_index}.{pane_index}");
+        let pane_target = format!("{session_name}:{}.{}", row.window_index, row.pane_index);
 
         // Try Claude first: direct PID has a session file
         if sessions_dir.join(format!("{pid}.json")).exists() {
@@ -1560,6 +1659,8 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
                 tmux_session: session_name.to_string(),
                 tmux_window: window_name.to_string(),
                 pane_target,
+                pane_id: row.pane_id.to_string(),
+                scheduled_continue_at: row.scheduled_continue_at,
                 pane_cwd: pane_path.to_string(),
                 agent: AgentKind::Claude,
                 codex_session_id: None,
@@ -1576,6 +1677,8 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
                     tmux_session: session_name.to_string(),
                     tmux_window: window_name.to_string(),
                     pane_target,
+                    pane_id: row.pane_id.to_string(),
+                    scheduled_continue_at: row.scheduled_continue_at,
                     pane_cwd: pane_path.to_string(),
                     agent: AgentKind::Codex,
                     codex_session_id: Some(session_id),
@@ -1592,6 +1695,8 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
                 tmux_session: session_name.to_string(),
                 tmux_window: window_name.to_string(),
                 pane_target,
+                pane_id: row.pane_id.to_string(),
+                scheduled_continue_at: row.scheduled_continue_at,
                 pane_cwd: pane_path.to_string(),
                 agent: AgentKind::Claude,
                 codex_session_id: None,
@@ -1620,6 +1725,7 @@ fn find_claude_child_pid(parent_pid: i32) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone, Utc};
     use std::io::{BufReader, Cursor};
 
     #[test]
@@ -1712,6 +1818,81 @@ mod tests {
     #[test]
     fn validate_cwd_accepts_real_dir() {
         assert!(validate_cwd("/tmp"));
+    }
+
+    #[test]
+    fn claude_pane_status_reports_session_limit() {
+        // Match the exact marker observed in live Claude panes.
+        let reference = Utc.with_ymd_and_hms(2026, 7, 13, 20, 0, 0).unwrap();
+        let content = "\
+⎿  You've hit your session limit · resets 1:10am (Asia/Nicosia)
+   /upgrade to increase your usage limit.
+";
+
+        assert_eq!(
+            pane_status_from_content_at(content, reference, None).label(),
+            "Limit 1:10"
+        );
+    }
+
+    #[test]
+    fn claude_pane_status_reports_matching_scheduled_continue() {
+        // A pane option for this exact deadline changes Limit into Queued.
+        let reference = Utc.with_ymd_and_hms(2026, 7, 13, 20, 0, 0).unwrap();
+        let reset_at = Utc.with_ymd_and_hms(2026, 7, 13, 22, 10, 0).unwrap();
+        let content =
+            "⎿  You've hit your session limit · resets 1:10am (Asia/Nicosia)";
+
+        assert_eq!(
+            pane_status_from_content_at(content, reference, Some(reset_at.timestamp())).label(),
+            "Queued 1:10"
+        );
+    }
+
+    #[test]
+    fn active_working_signal_overrides_stale_session_limit() {
+        // Once Claude resumes, a visible historical limit marker must not win.
+        let reference = Utc.with_ymd_and_hms(2026, 7, 13, 20, 0, 0).unwrap();
+        let content = "\
+✽ Continuing implementation…
+⎿  You've hit your session limit · resets 1:10am (Asia/Nicosia)
+";
+
+        assert_eq!(
+            pane_status_from_content_at(content, reference, None),
+            SessionStatus::Working
+        );
+    }
+
+    #[test]
+    fn active_input_signal_overrides_stale_session_limit() {
+        // A current permission prompt remains more urgent than historical limit text.
+        let reference = Utc.with_ymd_and_hms(2026, 7, 13, 20, 0, 0).unwrap();
+        let content = "\
+Esc to cancel
+⎿  You've hit your session limit · resets 1:10am (Asia/Nicosia)
+";
+
+        assert_eq!(
+            pane_status_from_content_at(content, reference, None),
+            SessionStatus::Input
+        );
+    }
+
+    #[test]
+    fn tmux_pane_row_includes_immutable_id_and_schedule() {
+        // Discovery must retain tmux's stable pane ID and pane-local deadline option.
+        let row = parse_tmux_pane_row(
+            "123|||W|||claude|||/tmp|||1|||0|||win|||%42|||1783980600",
+        )
+        .unwrap();
+
+        assert_eq!(row.pid, 123);
+        assert_eq!(row.session_name, "W");
+        assert_eq!(row.window_name, "win");
+        assert_eq!(row.pane_id, "%42");
+        assert_eq!(row.scheduled_continue_at, Some(1_783_980_600));
+        assert!(parse_tmux_pane_row("123|||missing-fields").is_none());
     }
 
     #[test]
