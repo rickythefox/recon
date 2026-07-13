@@ -859,6 +859,9 @@ fn parse_jsonl(
     let mut effort = prev_effort;
     let mut last_activity = prev_activity;
     let mut session_name = prev_session_name;
+    // A user-set custom title wins over Claude's auto-generated ai-title, so
+    // once we see one in this chunk, ignore later ai-title records.
+    let mut custom_title_set = false;
     let mut cwd = None;
 
     if prev_file_size > 0 {
@@ -968,6 +971,17 @@ fn parse_jsonl(
                     if title.is_empty() {
                         session_name = None;
                     } else {
+                        session_name = Some(title.to_string());
+                    }
+                    custom_title_set = true;
+                }
+            }
+        } else if !custom_title_set && trimmed.contains("\"type\":\"ai-title\"") {
+            // Claude's auto-generated title, e.g.
+            // {"type":"ai-title","aiTitle":"Validate WDP bug report points",...}
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if let Some(title) = v.get("aiTitle").and_then(|t| t.as_str()) {
+                    if !title.is_empty() {
                         session_name = Some(title.to_string());
                     }
                 }
@@ -1898,5 +1912,37 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 ";
 
         assert_eq!(pane_status_from_content(content), SessionStatus::Input);
+    }
+
+    // Write `content` to a unique temp jsonl, parse it fresh, return the name.
+    fn parse_name(content: &str) -> Option<String> {
+        let path = std::env::temp_dir()
+            .join(format!("recon-title-test-{}-{}.jsonl", std::process::id(), content.len()));
+        std::fs::write(&path, content).unwrap();
+        let info = parse_jsonl(&path, 0, 0, 0, None, None, None, None);
+        let _ = std::fs::remove_file(&path);
+        info.session_name
+    }
+
+    #[test]
+    fn parse_jsonl_reads_ai_title() {
+        // Regression: current Claude Code records the auto title as
+        // {"type":"ai-title","aiTitle":"..."}, not a custom-title. recon showed
+        // no name for these sessions (only the branch).
+        let content = concat!(
+            "{\"type\":\"user\",\"sessionId\":\"s\"}\n",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Validate WDP bug report points\",\"sessionId\":\"s\"}\n"
+        );
+        assert_eq!(parse_name(content), Some("Validate WDP bug report points".to_string()));
+    }
+
+    #[test]
+    fn parse_jsonl_prefers_custom_title_over_ai_title() {
+        // A user-set custom title wins even when an ai-title is emitted later.
+        let content = concat!(
+            "{\"type\":\"custom-title\",\"customTitle\":\"my-name\",\"sessionId\":\"s\"}\n",
+            "{\"type\":\"ai-title\",\"aiTitle\":\"auto generated\",\"sessionId\":\"s\"}\n"
+        );
+        assert_eq!(parse_name(content), Some("my-name".to_string()));
     }
 }
