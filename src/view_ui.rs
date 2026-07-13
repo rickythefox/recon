@@ -257,7 +257,7 @@ fn render_sprite_lines(sprite: &Sprite, palette: Palette) -> Vec<Line<'static>> 
 struct Room {
     name: String,
     session_indices: Vec<usize>,
-    has_input: bool,
+    has_attention: bool,
     last_activity: Option<String>,
 }
 
@@ -277,9 +277,10 @@ fn group_into_rooms(sessions: &[Session], indices: &[usize]) -> Vec<Room> {
     let mut rooms: Vec<Room> = map
         .into_iter()
         .map(|(name, indices)| {
-            let has_input = indices
+            // Any attention state promotes the room ahead of ordinary activity ordering.
+            let has_attention = indices
                 .iter()
-                .any(|&i| sessions[i].status == SessionStatus::Input);
+                .any(|&i| sessions[i].status.needs_attention());
             let last_activity = indices
                 .iter()
                 .filter_map(|&i| sessions[i].last_activity.as_ref())
@@ -288,15 +289,15 @@ fn group_into_rooms(sessions: &[Session], indices: &[usize]) -> Vec<Room> {
             Room {
                 name,
                 session_indices: indices,
-                has_input,
+                has_attention,
                 last_activity,
             }
         })
         .collect();
 
     rooms.sort_by(|a, b| {
-        b.has_input
-            .cmp(&a.has_input)
+        b.has_attention
+            .cmp(&a.has_attention)
             .then_with(|| b.last_activity.cmp(&a.last_activity))
     });
 
@@ -470,20 +471,9 @@ fn render_rooms(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn render_room(
-    frame: &mut Frame,
-    app: &App,
-    room: &Room,
-    area: Rect,
-    slot_num: Option<usize>,
-    selected_agent: Option<usize>,
-) {
-    let border_color = if room.has_input {
-        if app.tick % 2 == 0 {
-            Color::Yellow
-        } else {
-            Color::White
-        }
+fn render_room(frame: &mut Frame, app: &App, room: &Room, area: Rect, slot_num: Option<usize>, selected_agent: Option<usize>) {
+    let border_color = if room.has_attention {
+        if app.tick % 2 == 0 { Color::Yellow } else { Color::White }
     } else {
         Color::DarkGray
     };
@@ -492,7 +482,7 @@ fn render_room(
         Some(n) => format!(" [{}] {} ({}) ", n, room.name, room.session_indices.len()),
         None => format!(" {} ({}) ", room.name, room.session_indices.len()),
     };
-    let title_style = if room.has_input {
+    let title_style = if room.has_attention {
         Style::default().fg(border_color)
     } else {
         Style::default().fg(Color::White)
@@ -665,6 +655,8 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::raw(" select  "));
         spans.push(Span::styled("Enter", Style::default().fg(Color::Cyan)));
         spans.push(Span::raw(" switch  "));
+        spans.push(Span::styled("c", Style::default().fg(Color::Cyan)));
+        spans.push(Span::raw(" continue  "));
         spans.push(Span::styled("x", Style::default().fg(Color::Cyan)));
         spans.push(Span::raw(" kill  "));
         spans.push(Span::styled("n", Style::default().fg(Color::Cyan)));
@@ -710,6 +702,7 @@ fn truncate_str(s: &str, max_width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone, Utc};
     use std::path::PathBuf;
 
     fn make_session(cwd: &str, status: SessionStatus, last_activity: Option<&str>) -> Session {
@@ -738,6 +731,36 @@ mod tests {
             agent: crate::session::AgentKind::Claude,
             context_window: None,
         }
+    }
+
+    fn make_limit() -> crate::session_limit::SessionLimit {
+        // Keep attention-state ordering independent from the wall clock.
+        crate::session_limit::parse_session_limit(
+            "You've hit your session limit · resets 1:10am (Asia/Nicosia)",
+            Utc.with_ymd_and_hms(2026, 7, 13, 20, 0, 0).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn limited_rooms_sort_before_non_attention_rooms() {
+        // A limited pane needs dashboard attention even though it is not Input.
+        let sessions = vec![
+            make_session(
+                "/idle-recent",
+                SessionStatus::Idle,
+                Some("2026-07-13T20:00:00Z"),
+            ),
+            make_session(
+                "/limited-old",
+                SessionStatus::Limited(make_limit()),
+                Some("2026-07-13T19:00:00Z"),
+            ),
+        ];
+
+        let rooms = group_into_rooms(&sessions, &[0, 1]);
+
+        assert_eq!(rooms[0].name, "/limited-old");
     }
 
     #[test]

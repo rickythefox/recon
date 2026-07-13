@@ -287,6 +287,12 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('c') => {
+                // Schedule the selected limited pane without leaving the dashboard.
+                if let Some(real_idx) = self.resolve_selected() {
+                    self.schedule_continue_for(real_idx);
+                }
+            }
             KeyCode::Char('x') => {
                 if let Some(real_idx) = self.resolve_selected() {
                     if let Some(session) = self.sessions.get(real_idx) {
@@ -320,6 +326,13 @@ impl App {
                             tmux::switch_to_pane(&target);
                             self.should_quit = true;
                         }
+                    }
+                    return;
+                }
+                KeyCode::Char('c') => {
+                    // Use the same scheduling action for the selected zoomed agent.
+                    if let Some(real_idx) = self.selected_zoomed_session_index() {
+                        self.schedule_continue_for(real_idx);
                     }
                     return;
                 }
@@ -531,17 +544,48 @@ impl App {
             .collect()
     }
 
-    fn selected_zoomed_session(&self) -> Option<&Session> {
+    fn selected_zoomed_session_index(&self) -> Option<usize> {
+        // Clamp the cursor to the sessions that belong to the zoomed room.
         let indices = self.zoomed_room_session_indices();
         if indices.is_empty() {
             return None;
         }
-        let clamped = self.view_selected_agent.min(indices.len() - 1);
-        self.sessions.get(indices[clamped])
+        Some(indices[self.view_selected_agent.min(indices.len() - 1)])
+    }
+
+    fn selected_zoomed_session(&self) -> Option<&Session> {
+        // Resolve the selected room index back into the shared session list.
+        self.selected_zoomed_session_index()
+            .and_then(|index| self.sessions.get(index))
     }
 
     fn zoomed_room_cwd(&self) -> Option<String> {
         self.selected_zoomed_session().map(|s| s.cwd.clone())
+    }
+
+    fn schedule_continue_for_with<F>(&mut self, real_idx: usize, schedule: F)
+    where
+        F: FnOnce(&str, chrono::DateTime<chrono::Utc>) -> Result<(), String>,
+    {
+        // Only a limited session with an immutable pane ID can be scheduled.
+        let Some(session) = self.sessions.get(real_idx) else {
+            return;
+        };
+        let (Some(pane_id), session::SessionStatus::Limited(limit)) =
+            (session.pane_id.clone(), session.status.clone())
+        else {
+            return;
+        };
+
+        // Reflect success immediately; refresh will confirm it from the tmux option.
+        if schedule(&pane_id, limit.reset_at).is_ok() {
+            self.sessions[real_idx].status = session::SessionStatus::ContinueScheduled(limit);
+        }
+    }
+
+    fn schedule_continue_for(&mut self, real_idx: usize) {
+        // Production scheduling delegates the wait to the tmux server.
+        self.schedule_continue_for_with(real_idx, tmux::schedule_continue);
     }
 
     pub fn to_json(&self, tag_filters: &[String]) -> String {
@@ -602,6 +646,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use std::path::PathBuf;
 
     fn make_session(id: &str) -> Session {
@@ -614,7 +659,7 @@ mod tests {
             tmux_session: Some(format!("tmux-{id}")),
             tmux_window: None,
             pane_target: None,
-            pane_id: None,
+            pane_id: Some("%42".to_string()),
             model: None,
             total_input_tokens: 0,
             total_output_tokens: 0,
@@ -634,6 +679,59 @@ mod tests {
 
     fn make_key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn make_limit() -> crate::session_limit::SessionLimit {
+        // Keep action tests independent from the wall clock.
+        crate::session_limit::parse_session_limit(
+            "You've hit your session limit · resets 1:10am (Asia/Nicosia)",
+            chrono::Utc
+                .with_ymd_and_hms(2026, 7, 13, 20, 0, 0)
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn scheduling_selected_limited_session_marks_it_queued() {
+        // A successful scheduler call immediately confirms the queued state.
+        let mut app = App::new();
+        let limit = make_limit();
+        let deadline = limit.reset_at;
+        let mut session = make_session("limited");
+        session.status = session::SessionStatus::Limited(limit);
+        app.sessions = vec![session];
+        let called = std::cell::Cell::new(false);
+
+        app.schedule_continue_for_with(0, |pane_id, reset_at| {
+            called.set(true);
+            assert_eq!(pane_id, "%42");
+            assert_eq!(reset_at, deadline);
+            Ok(())
+        });
+
+        assert!(called.get());
+        assert!(matches!(
+            app.sessions[0].status,
+            session::SessionStatus::ContinueScheduled(_)
+        ));
+    }
+
+    #[test]
+    fn scheduling_queued_session_does_not_duplicate_timer() {
+        // Queued status is the local duplicate-scheduling guard.
+        let mut app = App::new();
+        let mut session = make_session("queued");
+        session.status = session::SessionStatus::ContinueScheduled(make_limit());
+        app.sessions = vec![session];
+        let called = std::cell::Cell::new(false);
+
+        app.schedule_continue_for_with(0, |_, _| {
+            called.set(true);
+            Ok(())
+        });
+
+        assert!(!called.get());
     }
 
     #[test]

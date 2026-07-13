@@ -18,6 +18,8 @@ Creatures are rendered as colored pixel art using half-block characters. Working
 |-------|----------|-------|
 | **Working** | Happy blob with sparkles and feet | Green |
 | **Input** | Angry blob with furrowed brows | Orange (pulsing) |
+| **Limit** | Angry blob | Red |
+| **Queued** | Angry blob | Red |
 | **Idle** | Sleeping blob with Zzz | Blue-grey |
 | **New** | Egg with spots | Cream |
 
@@ -42,6 +44,8 @@ j/k navigate  Enter switch  / search  v view  q quit
 
 - **Input** rows are highlighted — these sessions are blocked waiting for your approval
 - **Working** sessions are actively streaming or running tools
+- **Limit** sessions have exhausted Claude's session allowance and show the reset time
+- **Queued** sessions will receive `continue` at their reset time
 - **Idle** sessions are done and waiting for your next prompt
 - **New** sessions haven't had any interaction yet
 
@@ -82,6 +86,7 @@ recon is built around **tmux**. Each Claude Code instance runs in its own tmux s
 |---|---|
 | `esc to interrupt` | **Working** — streaming response or running a tool |
 | `Esc to cancel` | **Input** — permission prompt, waiting for you |
+| `You've hit your session limit · resets ...` | **Limit** - waiting for Claude's session reset |
 | anything else | **Idle** — waiting for your next prompt |
 | *(0 tokens)* | **New** — no interaction yet |
 
@@ -123,6 +128,7 @@ recon unpark                                 # Restore previously parked session
 | `Enter` | Switch to selected tmux session |
 | `/` | Search / filter sessions by name |
 | `i` / `Tab` | Jump to next agent waiting for input |
+| `c` | Schedule continue at session reset |
 | `x` | Kill selected session |
 | `v` | Switch to Tamagotchi view |
 | `q` / `Esc` | Quit (Esc clears filter first) |
@@ -136,6 +142,7 @@ recon unpark                                 # Restore previously parked session
 | `j` / `k` | Previous / next page |
 | `h` / `l` | Select agent (when zoomed) |
 | `Enter` | Switch to selected agent (when zoomed) |
+| `c` | Schedule continue at session reset (when zoomed) |
 | `x` | Kill selected agent (when zoomed) |
 | `n` | New session in room (when zoomed) |
 | `Esc` | Zoom out (or quit) |

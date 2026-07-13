@@ -387,6 +387,8 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(" zoom  "),
             Span::styled("b", Style::default().fg(Color::Cyan)),
             Span::raw(" back  "),
+            Span::styled("c", Style::default().fg(Color::Cyan)),
+            Span::raw(" continue  "),
             Span::styled("x", Style::default().fg(Color::Cyan)),
             Span::raw(" kill  "),
             Span::styled("/", Style::default().fg(Color::Cyan)),

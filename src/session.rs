@@ -100,6 +100,16 @@ impl SessionStatus {
             }
         }
     }
+
+    pub fn needs_attention(&self) -> bool {
+        // Input needs action now; limit states need visible scheduling attention.
+        matches!(
+            self,
+            SessionStatus::Input
+                | SessionStatus::Limited(_)
+                | SessionStatus::ContinueScheduled(_)
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
