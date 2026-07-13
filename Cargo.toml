@@ -14,3 +14,4 @@ dirs = "6"
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 rusqlite = { version = "0.34", features = ["bundled"] }
+chrono-tz = "0.10.4"

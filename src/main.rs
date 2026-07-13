@@ -8,6 +8,7 @@ mod model;
 mod new_session;
 mod park;
 mod session;
+mod session_limit;
 mod state;
 mod tmux;
 mod ui;
