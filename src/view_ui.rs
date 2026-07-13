@@ -194,6 +194,7 @@ fn sprite_data(status: &SessionStatus, frame: usize) -> (&'static Sprite, Palett
         SessionStatus::Idle => (&SPRITE_IDLE[0], PAL_IDLE),
         SessionStatus::Input => (&SPRITE_INPUT[frame % 3], PAL_INPUT),
         SessionStatus::BackgroundTasks(_) => (&SPRITE_WORKING[frame % 3], PAL_WORKING),
+        SessionStatus::BackgroundAgents(_) => (&SPRITE_WORKING[frame % 3], PAL_WORKING),
     }
 }
 
@@ -305,6 +306,7 @@ fn animation_frame(status: &SessionStatus, tick: u64) -> usize {
     match status {
         SessionStatus::Working => ((tick / 2) % 3) as usize,
         SessionStatus::BackgroundTasks(_) => ((tick / 2) % 3) as usize,
+        SessionStatus::BackgroundAgents(_) => ((tick / 2) % 3) as usize,
         SessionStatus::Input => (tick % 3) as usize,
         _ => 0,
     }
@@ -324,6 +326,7 @@ fn status_color(status: &SessionStatus) -> Color {
         SessionStatus::Idle => Color::DarkGray,
         SessionStatus::Input => Color::Yellow,
         SessionStatus::BackgroundTasks(_) => BACKGROUND_TASK_COLOR,
+        SessionStatus::BackgroundAgents(_) => BACKGROUND_TASK_COLOR,
     }
 }
 
