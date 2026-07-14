@@ -140,6 +140,8 @@ pub struct Session {
     pub jsonl_path: PathBuf,
     pub last_file_size: u64,
     pub tags: HashMap<String, String>,
+    // Persisted agent title, kept separate from the live pane display override.
+    pub recorded_session_name: Option<String>,
     pub session_name: Option<String>,
     pub agent: AgentKind,
     // Overrides model-derived context window (used by Codex where the rollout
@@ -209,6 +211,8 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
     let mut sessions: Vec<Session> = Vec::new();
     let mut matched_session_ids: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    // Retain each pane's one captured title while resolving duplicate JSONL paths.
+    let mut visible_titles: HashMap<String, Option<String>> = HashMap::new();
 
     // Scan all JSONL files across project directories.
     // No mtime cutoff needed — the live_map check (below) already filters out
@@ -270,7 +274,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                             prev.and_then(|s| s.model.clone()),
                             prev.and_then(|s| s.effort.clone()),
                             prev.and_then(|s| s.last_activity.clone()),
-                            prev.and_then(|s| s.session_name.clone()),
+                            prev.and_then(|s| s.recorded_session_name.clone()),
                         );
                         let cwd = info
                             .cwd
@@ -286,7 +290,12 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                         existing.total_input_tokens = info.input_tokens;
                         existing.total_output_tokens = info.output_tokens;
                         existing.last_activity = info.last_activity;
-                        existing.session_name = info.session_name;
+                        let recorded_session_name = info.session_name;
+                        existing.recorded_session_name = recorded_session_name.clone();
+                        existing.session_name = prefer_visible_title(
+                            visible_titles.get(&session_id).cloned().flatten(),
+                            recorded_session_name,
+                        );
                         existing.jsonl_path = path;
                         existing.last_file_size = info.file_size;
                     }
@@ -304,7 +313,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 prev.and_then(|s| s.model.clone()),
                 prev.and_then(|s| s.effort.clone()),
                 prev.and_then(|s| s.last_activity.clone()),
-                prev.and_then(|s| s.session_name.clone()),
+                prev.and_then(|s| s.recorded_session_name.clone()),
             );
 
             let cwd = info
@@ -313,7 +322,10 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 .unwrap_or_else(|| decode_project_path(&project_dir));
             let (project_name, relative_dir, branch) = git_project_info(&cwd);
 
-            let status = determine_status(
+            let PaneInspection {
+                status,
+                visible_title,
+            } = inspect_session_pane(
                 &path,
                 info.input_tokens,
                 info.output_tokens,
@@ -321,6 +333,14 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 live.scheduled_continue_at,
                 &live.agent,
             );
+
+            // Keep the recorded title for future incremental parses and render the pane override.
+            let recorded_session_name = info.session_name;
+            let session_name = prefer_visible_title(
+                visible_title.clone(),
+                recorded_session_name.clone(),
+            );
+            visible_titles.insert(session_id.clone(), visible_title);
 
             matched_session_ids.insert(session_id.clone());
 
@@ -346,7 +366,8 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 jsonl_path: path,
                 last_file_size: info.file_size,
                 tags,
-                session_name: info.session_name,
+                recorded_session_name,
+                session_name,
                 agent: AgentKind::Claude,
                 context_window: None,
             });
@@ -415,13 +436,16 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 prev.and_then(|s| s.model.clone()),
                 prev.and_then(|s| s.effort.clone()),
                 prev.and_then(|s| s.last_activity.clone()),
-                prev.and_then(|s| s.session_name.clone()),
+                prev.and_then(|s| s.recorded_session_name.clone()),
             );
 
             let cwd = info.cwd.clone().unwrap_or_else(|| live.pane_cwd.clone());
             let (project_name, relative_dir, branch) = git_project_info(&cwd);
 
-            let status = determine_status(
+            let PaneInspection {
+                status,
+                visible_title,
+            } = inspect_session_pane(
                 &path,
                 info.input_tokens,
                 info.output_tokens,
@@ -429,6 +453,10 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 live.scheduled_continue_at,
                 &live.agent,
             );
+
+            // Keep the persisted title separate so the visible override can disappear cleanly.
+            let recorded_session_name = info.session_name;
+            let session_name = prefer_visible_title(visible_title, recorded_session_name.clone());
 
             let tags = read_tmux_tags(&live.tmux_session);
             sessions.push(Session {
@@ -452,13 +480,25 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 jsonl_path: path,
                 last_file_size: info.file_size,
                 tags,
-                session_name: info.session_name,
+                recorded_session_name,
+                session_name,
                 agent: AgentKind::Claude,
                 context_window: None,
             });
         } else {
             // No JSONL found — brand-new session, show as New placeholder
             let (project_name, relative_dir, branch) = git_project_info(&live.pane_cwd);
+            let PaneInspection {
+                status,
+                visible_title,
+            } = inspect_session_pane(
+                &PathBuf::new(),
+                0,
+                0,
+                Some(&live.pane_target),
+                live.scheduled_continue_at,
+                &live.agent,
+            );
             let tags = read_tmux_tags(&live.tmux_session);
             sessions.push(Session {
                 session_id: session_id_key.clone(),
@@ -474,14 +514,15 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 effort: None,
                 total_input_tokens: 0,
                 total_output_tokens: 0,
-                status: SessionStatus::New,
+                status,
                 pid: Some(live.pid),
                 last_activity: None,
                 started_at: live.started_at,
                 jsonl_path: PathBuf::new(),
                 last_file_size: 0,
                 tags,
-                session_name: None,
+                recorded_session_name: None,
+                session_name: visible_title,
                 agent: AgentKind::Claude,
                 context_window: None,
             });
@@ -512,14 +553,18 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
         let input_tokens = token_info.as_ref().map(|t| t.last_input_tokens).unwrap_or(0);
         let ctx_window = token_info.as_ref().map(|t| t.context_window).filter(|&w| w > 0);
 
-        let status = determine_status(
+        let status = inspect_session_pane(
             &PathBuf::new(),
             input_tokens,
             0,
             Some(&live.pane_target),
             live.scheduled_continue_at,
             &AgentKind::Codex,
-        );
+        )
+        .status;
+
+        // Codex titles remain sourced only from Codex session metadata.
+        let recorded_session_name = meta.as_ref().and_then(|m| m.title.clone());
 
         let tags = read_tmux_tags(&live.tmux_session);
         sessions.push(Session {
@@ -547,7 +592,8 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
             jsonl_path: rollout_path,
             last_file_size: 0,
             tags,
-            session_name: meta.as_ref().and_then(|m| m.title.clone()),
+            recorded_session_name: recorded_session_name.clone(),
+            session_name: recorded_session_name,
             agent: AgentKind::Codex,
             context_window: ctx_window,
         });
@@ -1276,19 +1322,33 @@ pub fn find_session_cwd(session_id: &str) -> Option<String> {
     None
 }
 
-/// Determine session status from file recency and token counts.
+#[derive(Debug, Clone, PartialEq)]
+struct PaneInspection {
+    status: SessionStatus,
+    visible_title: Option<String>,
+}
+
+/// Prefer the title rendered by the live pane without discarding persisted metadata.
+fn prefer_visible_title(
+    visible_title: Option<String>,
+    recorded_title: Option<String>,
+) -> Option<String> {
+    visible_title.or(recorded_title)
+}
+
+/// Determine session status and visible title from pane state and token counts.
 /// - New: no tokens yet (never interacted)
 /// - Working: JSONL modified in last 5s
 /// - Input: last activity within 10 minutes (active conversation, waiting for user)
 /// - Idle: last activity older than 10 minutes
-fn determine_status(
+fn inspect_session_pane(
     path: &Path,
     input_tokens: u64,
     output_tokens: u64,
     pane_target: Option<&str>,
     scheduled_continue_at: Option<i64>,
     agent: &AgentKind,
-) -> SessionStatus {
+) -> PaneInspection {
     // tmux pane content is the source of truth for active sessions
     if let Some(target) = pane_target {
         // Anchor clock-only reset text to the timestamp of the rate-limit event.
@@ -1297,52 +1357,102 @@ fn determine_status(
             .and_then(|metadata| metadata.modified())
             .map(DateTime::<Utc>::from)
             .unwrap_or_else(|_| Utc::now());
-        let pane = match agent {
-            AgentKind::Claude => pane_status(target, reference, scheduled_continue_at),
-            AgentKind::Codex => crate::codex::codex_pane_status(target),
+        let mut inspection = match agent {
+            AgentKind::Claude => inspect_claude_pane(target, reference, scheduled_continue_at),
+            AgentKind::Codex => PaneInspection {
+                status: crate::codex::codex_pane_status(target),
+                visible_title: None,
+            },
         };
         // Only show New if pane also looks idle (no active streaming)
-        if input_tokens == 0 && output_tokens == 0 && pane == SessionStatus::Idle {
-            return SessionStatus::New;
+        if input_tokens == 0
+            && output_tokens == 0
+            && inspection.status == SessionStatus::Idle
+        {
+            inspection.status = SessionStatus::New;
         }
-        return pane;
+        return inspection;
     }
 
-    if input_tokens == 0 && output_tokens == 0 {
+    let status = if input_tokens == 0 && output_tokens == 0 {
         SessionStatus::New
     } else {
         SessionStatus::Idle
+    };
+    PaneInspection {
+        status,
+        visible_title: None,
     }
 }
 
-/// Determine status by inspecting the Claude Code TUI pane content.
+/// Inspect status and visible title from one Claude Code TUI pane capture.
 ///
 /// Scans the last few non-empty lines bottom-up looking for:
 ///   - Working: a line starting with a Unicode spinner (✽✢✳✶⏺) that indicates
 ///     active thinking/tool execution
 ///   - Input: "Esc to cancel" on the last line, or a selection menu ("❯ N.")
 ///   - Idle: anything else
-fn pane_status(
+fn inspect_claude_pane(
     pane_target: &str,
     reference: DateTime<Utc>,
     scheduled_continue_at: Option<i64>,
-) -> SessionStatus {
+) -> PaneInspection {
     let output = match std::process::Command::new("tmux")
         .args(["capture-pane", "-t", pane_target, "-p"])
         .output()
     {
         Ok(o) if o.status.success() => o,
-        _ => return SessionStatus::Idle,
+        _ => {
+            return PaneInspection {
+                status: SessionStatus::Idle,
+                visible_title: None,
+            }
+        }
     };
 
     let content = String::from_utf8_lossy(&output.stdout);
 
-    pane_status_from_content_at(&content, reference, scheduled_continue_at)
+    inspect_claude_pane_content_at(&content, reference, scheduled_continue_at)
 }
 
 #[cfg(test)]
 fn pane_status_from_content(content: &str) -> SessionStatus {
     pane_status_from_content_at(content, Utc::now(), None)
+}
+
+/// Parse the active Claude title from the prompt border directly above the composer.
+fn visible_claude_title(content: &str) -> Option<String> {
+    let lines: Vec<&str> = content.lines().collect();
+    lines.windows(2).rev().find_map(|pair| {
+        let composer = pair[1].trim_start();
+        if !(composer.starts_with('❯') || composer.starts_with('›')) {
+            return None;
+        }
+
+        // Require complete horizontal border runs so ordinary output is ignored.
+        let border = pair[0].trim();
+        let leading = border.chars().take_while(|c| *c == '─').count();
+        let trailing = border.chars().rev().take_while(|c| *c == '─').count();
+        if leading < 2 || trailing < 2 {
+            return None;
+        }
+
+        // A border without inner text is the unnamed prompt and has no override.
+        let title = border.trim_matches('─').trim();
+        (!title.is_empty()).then(|| title.to_string())
+    })
+}
+
+/// Derive status and title from the same captured Claude pane content.
+fn inspect_claude_pane_content_at(
+    content: &str,
+    reference: DateTime<Utc>,
+    scheduled_continue_at: Option<i64>,
+) -> PaneInspection {
+    PaneInspection {
+        status: pane_status_from_content_at(content, reference, scheduled_continue_at),
+        visible_title: visible_claude_title(content),
+    }
 }
 
 fn pane_status_from_content_at(
@@ -2208,6 +2318,77 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
 ";
 
         assert_eq!(pane_status_from_content(content), SessionStatus::Input);
+    }
+
+    #[test]
+    fn claude_pane_inspection_reads_visible_custom_title_and_status() {
+        // The foregrounded agent title is rendered immediately above the prompt.
+        let content = "\
+⎿  You've hit your session limit · resets 1:10am (Asia/Nicosia)
+──────────────────────── validate-and-fix-victor-report-points ──
+❯
+────────────────────────────────────────────────────────────────
+  Fable 5 | Ctx Used: 55.0% | .../worko/fabric-data-platform
+  ⏵⏵ bypass permissions on · ← for agents
+";
+        let reference = Utc.with_ymd_and_hms(2026, 7, 13, 20, 0, 0).unwrap();
+
+        let inspection = inspect_claude_pane_content_at(content, reference, None);
+
+        assert_eq!(
+            inspection.visible_title.as_deref(),
+            Some("validate-and-fix-victor-report-points")
+        );
+        assert!(matches!(inspection.status, SessionStatus::Limited(_)));
+    }
+
+    #[test]
+    fn claude_pane_inspection_reads_title_above_alternate_composer() {
+        // Claude also renders a narrow composer glyph in active panes.
+        let content = "\
+──────────────────────── visible-agent-title ──
+›
+────────────────────────────────────────────────
+  Opus 4.8 | Ctx Used: 19.0% | .../work
+";
+
+        let inspection = inspect_claude_pane_content_at(content, Utc::now(), None);
+
+        assert_eq!(
+            inspection.visible_title.as_deref(),
+            Some("visible-agent-title")
+        );
+    }
+
+    #[test]
+    fn claude_pane_inspection_ignores_output_and_malformed_borders() {
+        // Only a titled border immediately followed by Claude's prompt is valid.
+        let content = "\
+──────── historical section ────────
+ordinary output
+──────────────── malformed title
+❯
+────────────────────────────────────
+";
+
+        let inspection = inspect_claude_pane_content_at(content, Utc::now(), None);
+
+        assert_eq!(inspection.visible_title, None);
+    }
+
+    #[test]
+    fn visible_claude_title_overrides_jsonl_and_falls_back_when_absent() {
+        // Preserve the recorded title as the fallback when no visible title exists.
+        let recorded = Some("Validate WDP bug report points".to_string());
+
+        assert_eq!(
+            prefer_visible_title(
+                Some("validate-and-fix-victor-report-points".to_string()),
+                recorded.clone(),
+            ),
+            Some("validate-and-fix-victor-report-points".to_string())
+        );
+        assert_eq!(prefer_visible_title(None, recorded.clone()), recorded);
     }
 
     // Write `content` to a unique temp jsonl, parse it fresh, return the name.

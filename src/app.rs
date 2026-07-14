@@ -671,6 +671,7 @@ mod tests {
             jsonl_path: PathBuf::new(),
             last_file_size: 0,
             tags: HashMap::new(),
+            recorded_session_name: Some("long session title".to_string()),
             session_name: Some("long session title".to_string()),
             agent: session::AgentKind::Claude,
             context_window: None,

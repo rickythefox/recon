@@ -727,6 +727,7 @@ mod tests {
             jsonl_path: PathBuf::new(),
             last_file_size: 0,
             tags: std::collections::HashMap::new(),
+            recorded_session_name: None,
             session_name: None,
             agent: crate::session::AgentKind::Claude,
             context_window: None,
