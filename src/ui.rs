@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -55,9 +57,9 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
         first.is_some() && !names.all(|n| Some(n) == first)
     };
     let project_width = project_column_width(area.width, show_session_col, app);
-    let status_width = configured_width(app, Column::Status, STATUS_COLUMN_WIDTH);
-    let model_width = configured_width(app, Column::Model, MODEL_COLUMN_WIDTH);
-    let activity_width = configured_width(app, Column::LastActivity, ACTIVITY_COLUMN_WIDTH);
+    let status_width = configured_width(&app.config.table.widths, Column::Status, STATUS_COLUMN_WIDTH);
+    let model_width = configured_width(&app.config.table.widths, Column::Model, MODEL_COLUMN_WIDTH);
+    let activity_width = configured_width(&app.config.table.widths, Column::LastActivity, ACTIVITY_COLUMN_WIDTH);
 
     let mut header_cells = vec![Cell::from(if show_session_col { " #/S" } else { " # " })];
     header_cells.extend([
@@ -218,13 +220,13 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 
     // Id column holds the number, plus the session name on line 2 when shown
     let id_width = if show_session_col {
-        configured_width(app, Column::Session, SESSION_COLUMN_WIDTH)
+        configured_width(&app.config.table.widths, Column::Session, SESSION_COLUMN_WIDTH)
     } else {
         NUMBER_COLUMN_WIDTH
     };
     let mut widths = vec![Constraint::Length(id_width)];
     widths.extend([
-        Constraint::Min(configured_width(app, Column::Project, 20)),
+        Constraint::Min(configured_width(&app.config.table.widths, Column::Project, 20)),
         Constraint::Length(status_width),
         Constraint::Length(model_width),
         Constraint::Length(activity_width),
@@ -262,7 +264,7 @@ fn scroll_offset(selected: usize, capacity: usize, total: usize) -> usize {
 fn project_column_width(area_width: u16, show_session_col: bool, app: &App) -> usize {
     // Id column width: wider when it also carries the session name on line 2
     let id_width = if show_session_col {
-        configured_width(app, Column::Session, SESSION_COLUMN_WIDTH)
+        configured_width(&app.config.table.widths, Column::Session, SESSION_COLUMN_WIDTH)
     } else {
         NUMBER_COLUMN_WIDTH
     };
@@ -270,17 +272,17 @@ fn project_column_width(area_width: u16, show_session_col: bool, app: &App) -> u
     let column_count = 5;
     let fixed_width = TABLE_BORDER_WIDTH
         + id_width
-        + configured_width(app, Column::Status, STATUS_COLUMN_WIDTH)
-        + configured_width(app, Column::Model, MODEL_COLUMN_WIDTH)
-        + configured_width(app, Column::LastActivity, ACTIVITY_COLUMN_WIDTH)
+        + configured_width(&app.config.table.widths, Column::Status, STATUS_COLUMN_WIDTH)
+        + configured_width(&app.config.table.widths, Column::Model, MODEL_COLUMN_WIDTH)
+        + configured_width(&app.config.table.widths, Column::LastActivity, ACTIVITY_COLUMN_WIDTH)
         + TABLE_COLUMN_SPACING * (column_count - 1);
 
     area_width.saturating_sub(fixed_width) as usize
 }
 
 /// Per-column width override from config.toml, else the built-in default.
-fn configured_width(app: &App, column: Column, default: u16) -> u16 {
-    app.config.table.widths.get(&column).copied().unwrap_or(default)
+fn configured_width(widths: &HashMap<Column, u16>, column: Column, default: u16) -> u16 {
+    widths.get(&column).copied().unwrap_or(default)
 }
 
 /// A single rendered character paired with its style, used to scroll the
@@ -556,5 +558,34 @@ mod tests {
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content, "abcd");
         assert_eq!(spans[1].content, "ef");
+    }
+
+    #[test]
+    fn configured_width_override_beats_default_per_column() {
+        let mut widths = HashMap::new();
+        widths.insert(Column::Session, 12);
+        widths.insert(Column::Project, 30);
+        widths.insert(Column::Status, 20);
+        widths.insert(Column::Model, 16);
+        widths.insert(Column::LastActivity, 18);
+
+        assert_eq!(
+            configured_width(&widths, Column::Session, SESSION_COLUMN_WIDTH),
+            12
+        );
+        assert_eq!(configured_width(&widths, Column::Project, 20), 30);
+        assert_eq!(
+            configured_width(&widths, Column::Status, STATUS_COLUMN_WIDTH),
+            20
+        );
+        assert_eq!(
+            configured_width(&widths, Column::Model, MODEL_COLUMN_WIDTH),
+            16
+        );
+        assert_eq!(
+            configured_width(&widths, Column::LastActivity, ACTIVITY_COLUMN_WIDTH),
+            18
+        );
+        assert_eq!(configured_width(&widths, Column::Window, 24), 24);
     }
 }
