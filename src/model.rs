@@ -29,6 +29,7 @@
 
 /// Map raw model IDs to human-friendly display names.
 pub fn display_name(model_id: &str) -> &str {
+    let model_id = canonical_model_id(model_id);
     match model_id {
         "claude-fable-5" => "Fable 5",
         "claude-opus-4-8" => "Opus 4.8",
@@ -49,8 +50,15 @@ pub fn display_name(model_id: &str) -> &str {
         "gpt-5.4" => "GPT-5.4",
         "o4-mini" => "o4-mini",
         "o3" => "o3",
+        "grok-4.6" => "Grok 4.6",
         _ => model_id,
     }
+}
+
+/// Strip provider prefixes (`anthropic/`, `xai-oauth/`, `amazon-bedrock/xai.`).
+fn canonical_model_id(model_id: &str) -> &str {
+    let name = model_id.rsplit('/').next().unwrap_or(model_id);
+    name.strip_prefix("xai.").unwrap_or(name)
 }
 
 /// Context window size for a given model ID.
@@ -153,6 +161,14 @@ mod tests {
     fn displays_opus_4_8_compactly() {
         assert_eq!(display_name("claude-opus-4-8"), "Opus 4.8");
         assert_eq!(format_with_effort("claude-opus-4-8", ""), "Opus 4.8");
+    }
+
+    #[test]
+    fn displays_provider_prefixed_omp_models() {
+        assert_eq!(display_name("xai-oauth/grok-4.6"), "Grok 4.6");
+        assert_eq!(display_name("amazon-bedrock/xai.grok-4.6"), "Grok 4.6");
+        assert_eq!(display_name("anthropic/claude-opus-4-8"), "Opus 4.8");
+        assert_eq!(display_name("grok-4.6"), "Grok 4.6");
     }
 
     #[test]

@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::app::App;
+use crate::config::Column;
 use crate::session::SessionStatus;
 
 const TABLE_BORDER_WIDTH: u16 = 2;
@@ -53,7 +54,10 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
         let first = names.next();
         first.is_some() && !names.all(|n| Some(n) == first)
     };
-    let project_width = project_column_width(area.width, show_session_col);
+    let project_width = project_column_width(area.width, show_session_col, app);
+    let status_width = configured_width(app, Column::Status, STATUS_COLUMN_WIDTH);
+    let model_width = configured_width(app, Column::Model, MODEL_COLUMN_WIDTH);
+    let activity_width = configured_width(app, Column::LastActivity, ACTIVITY_COLUMN_WIDTH);
 
     let mut header_cells = vec![Cell::from(if show_session_col { " #/S" } else { " # " })];
     header_cells.extend([
@@ -167,7 +171,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
             let status_chars = status_content(status_dot, status_color, &status_label);
             let status_window = window_content(
                 &status_chars,
-                STATUS_COLUMN_WIDTH as usize,
+                status_width as usize,
                 app.selected_scroll_tick(),
                 is_active_row,
             );
@@ -175,10 +179,10 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 
             // Id column: row number on line 1, tmux session name on line 2
             let id_cell = if show_session_col {
-                let name_style = if session.agent == crate::session::AgentKind::Codex {
-                    Style::default().fg(Color::Cyan)
-                } else {
-                    Style::default()
+                let name_style = match session.agent {
+                    crate::session::AgentKind::Codex => Style::default().fg(Color::Cyan),
+                    crate::session::AgentKind::Omp => Style::default().fg(Color::Magenta),
+                    crate::session::AgentKind::Claude => Style::default(),
                 };
                 Cell::from(Text::from(vec![
                     Line::from(num),
@@ -214,16 +218,16 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 
     // Id column holds the number, plus the session name on line 2 when shown
     let id_width = if show_session_col {
-        SESSION_COLUMN_WIDTH
+        configured_width(app, Column::Session, SESSION_COLUMN_WIDTH)
     } else {
         NUMBER_COLUMN_WIDTH
     };
     let mut widths = vec![Constraint::Length(id_width)];
     widths.extend([
-        Constraint::Min(20),                        // Project (repo + branch)
-        Constraint::Length(STATUS_COLUMN_WIDTH),    // Status
-        Constraint::Length(MODEL_COLUMN_WIDTH),     // Model/Context
-        Constraint::Length(ACTIVITY_COLUMN_WIDTH),  // Last Activity
+        Constraint::Min(configured_width(app, Column::Project, 20)),
+        Constraint::Length(status_width),
+        Constraint::Length(model_width),
+        Constraint::Length(activity_width),
     ]);
 
     // Scroll the row window with the cursor when rows overflow the viewport.
@@ -255,10 +259,10 @@ fn scroll_offset(selected: usize, capacity: usize, total: usize) -> usize {
 }
 
 /// Estimate the rendered Project column width for budgeting the session title.
-fn project_column_width(area_width: u16, show_session_col: bool) -> usize {
+fn project_column_width(area_width: u16, show_session_col: bool, app: &App) -> usize {
     // Id column width: wider when it also carries the session name on line 2
     let id_width = if show_session_col {
-        SESSION_COLUMN_WIDTH
+        configured_width(app, Column::Session, SESSION_COLUMN_WIDTH)
     } else {
         NUMBER_COLUMN_WIDTH
     };
@@ -266,12 +270,17 @@ fn project_column_width(area_width: u16, show_session_col: bool) -> usize {
     let column_count = 5;
     let fixed_width = TABLE_BORDER_WIDTH
         + id_width
-        + STATUS_COLUMN_WIDTH
-        + MODEL_COLUMN_WIDTH
-        + ACTIVITY_COLUMN_WIDTH
+        + configured_width(app, Column::Status, STATUS_COLUMN_WIDTH)
+        + configured_width(app, Column::Model, MODEL_COLUMN_WIDTH)
+        + configured_width(app, Column::LastActivity, ACTIVITY_COLUMN_WIDTH)
         + TABLE_COLUMN_SPACING * (column_count - 1);
 
     area_width.saturating_sub(fixed_width) as usize
+}
+
+/// Per-column width override from config.toml, else the built-in default.
+fn configured_width(app: &App, column: Column, default: u16) -> u16 {
+    app.config.table.widths.get(&column).copied().unwrap_or(default)
 }
 
 /// A single rendered character paired with its style, used to scroll the

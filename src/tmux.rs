@@ -78,6 +78,7 @@ pub fn create_session(name: &str, cwd: &str, command: Option<&str>, tags: &[Stri
             let bin = match agent {
                 crate::session::AgentKind::Claude => which_claude().unwrap_or_else(|| "claude".to_string()),
                 crate::session::AgentKind::Codex => which_codex().unwrap_or_else(|| "codex".to_string()),
+                crate::session::AgentKind::Omp => which_omp().unwrap_or_else(|| "omp".to_string()),
             };
             tmux_args.push(bin);
         }
@@ -114,6 +115,7 @@ pub fn resume_session(session_id: &str, name: Option<&str>, agent: &crate::sessi
         crate::session::AgentKind::Codex => {
             crate::codex::find_codex_session_cwd(session_id).filter(|c| session::validate_cwd(c))
         }
+        crate::session::AgentKind::Omp => None,
     }
     .or_else(|| std::env::current_dir().map(|p| p.to_string_lossy().to_string()).ok())
     .unwrap_or_else(|| ".".to_string());
@@ -130,6 +132,10 @@ pub fn resume_session(session_id: &str, name: Option<&str>, agent: &crate::sessi
         crate::session::AgentKind::Codex => {
             let path = which_codex().unwrap_or_else(|| "codex".to_string());
             (path, vec!["resume".to_string(), session_id.to_string()])
+        }
+        crate::session::AgentKind::Omp => {
+            let path = which_omp().unwrap_or_else(|| "omp".to_string());
+            (path, vec!["-r".to_string(), session_id.to_string()])
         }
     };
 
@@ -204,6 +210,12 @@ fn which_claude() -> Option<String> {
 
 fn which_codex() -> Option<String> {
     let output = Command::new("which").arg("codex").output().ok()?;
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() { None } else { Some(path) }
+}
+
+fn which_omp() -> Option<String> {
+    let output = Command::new("which").arg("omp").output().ok()?;
     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if path.is_empty() { None } else { Some(path) }
 }

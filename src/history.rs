@@ -259,6 +259,7 @@ pub fn run_resume_picker() -> io::Result<Option<(String, String, AgentKind)>> {
                         let id_color = match e.agent {
                             AgentKind::Claude => Color::White,
                             AgentKind::Codex => Color::Cyan,
+                            AgentKind::Omp => Color::Magenta,
                         };
 
                         let project = dir_name(&e.cwd);

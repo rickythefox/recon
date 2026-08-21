@@ -631,6 +631,7 @@ impl App {
                     "agent": match s.agent {
                         crate::session::AgentKind::Claude => "claude",
                         crate::session::AgentKind::Codex => "codex",
+                        crate::session::AgentKind::Omp => "omp",
                     },
                 })
             })

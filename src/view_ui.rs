@@ -592,6 +592,8 @@ fn render_character(
             .add_modifier(Modifier::BOLD)
     } else if session.agent == crate::session::AgentKind::Codex {
         Style::default().fg(Color::Cyan)
+    } else if session.agent == crate::session::AgentKind::Omp {
+        Style::default().fg(Color::Magenta)
     } else {
         Style::default().fg(Color::White)
     };

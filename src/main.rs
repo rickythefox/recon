@@ -6,6 +6,7 @@ mod history;
 mod kitty;
 mod model;
 mod new_session;
+mod omp;
 mod park;
 mod session;
 mod session_limit;

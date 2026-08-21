@@ -105,6 +105,7 @@ impl NewSessionForm {
                 self.agent = match self.agent {
                     crate::session::AgentKind::Claude => crate::session::AgentKind::Codex,
                     crate::session::AgentKind::Codex => crate::session::AgentKind::Claude,
+                    crate::session::AgentKind::Omp => crate::session::AgentKind::Claude,
                 };
             }
             KeyCode::Tab | KeyCode::Down => {
@@ -259,6 +260,7 @@ impl NewSessionForm {
         let (agent_label, agent_color) = match self.agent {
             crate::session::AgentKind::Claude => ("Claude Code", Color::White),
             crate::session::AgentKind::Codex => ("Codex CLI", Color::Cyan),
+            crate::session::AgentKind::Omp => ("OMP", Color::Magenta),
         };
         frame.render_widget(
             Paragraph::new(agent_label).style(Style::default().fg(agent_color)),

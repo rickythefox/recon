@@ -116,6 +116,7 @@ impl SessionStatus {
 pub enum AgentKind {
     Claude,
     Codex,
+    Omp,
 }
 
 #[derive(Debug, Clone)]
@@ -391,10 +392,8 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
         if known_pids.contains(&live.pid) {
             continue;
         }
-
-        // Codex sessions are handled in their own loop below; skip them here
-        // to prevent duplicate Claude/New entries being created for Codex PIDs.
-        if live.agent == AgentKind::Codex {
+        // Codex and OMP sessions are handled in their own loops below.
+        if live.agent != AgentKind::Claude {
             continue;
         }
 
@@ -599,6 +598,73 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
         });
     }
 
+    // Handle OMP sessions from live_map (TTY → jsonl, pane footer for status/tokens).
+    for (session_id, live) in &live_map {
+        if live.agent != AgentKind::Omp {
+            continue;
+        }
+        if known_pids.contains(&live.pid) {
+            continue;
+        }
+
+        let jsonl_path = live.jsonl_path.clone().unwrap_or_default();
+        let meta = crate::omp::read_jsonl_meta(&jsonl_path);
+        let cwd = meta
+            .as_ref()
+            .and_then(|m| m.cwd.clone())
+            .unwrap_or_else(|| live.pane_cwd.clone());
+        let (project_name, relative_dir, branch) = git_project_info(&cwd);
+        let recorded_session_name = meta.as_ref().and_then(|m| m.title.clone());
+        let model = meta.as_ref().and_then(|m| m.model.clone());
+
+        let tokens = crate::omp::omp_pane_tokens(&live.pane_target);
+        let input_tokens = tokens.as_ref().map(|t| t.used_tokens).unwrap_or(0);
+        let ctx_window = tokens.as_ref().map(|t| t.context_window);
+
+        let status = inspect_session_pane(
+            &jsonl_path,
+            input_tokens,
+            0,
+            Some(&live.pane_target),
+            live.scheduled_continue_at,
+            &AgentKind::Omp,
+        )
+        .status;
+
+        let last_activity = jsonl_path.metadata().ok().and_then(|m| {
+            let modified = m.modified().ok()?;
+            Some(chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339())
+        });
+
+        let tags = read_tmux_tags(&live.tmux_session);
+        sessions.push(Session {
+            session_id: session_id.clone(),
+            project_name,
+            branch,
+            cwd,
+            relative_dir,
+            tmux_session: Some(live.tmux_session.clone()),
+            tmux_window: Some(live.tmux_window.clone()),
+            pane_target: Some(live.pane_target.clone()),
+            pane_id: Some(live.pane_id.clone()),
+            model,
+            effort: None,
+            total_input_tokens: input_tokens,
+            total_output_tokens: 0,
+            status,
+            pid: Some(live.pid),
+            last_activity,
+            started_at: live.started_at,
+            jsonl_path,
+            last_file_size: 0,
+            tags,
+            recorded_session_name: recorded_session_name.clone(),
+            session_name: recorded_session_name,
+            agent: AgentKind::Omp,
+            context_window: ctx_window,
+        });
+    }
+
     // Sort by last activity at minute resolution (most recent first),
     // then by started_at as tiebreaker. Truncating to the minute prevents
     // the table from reordering on every poll cycle.
@@ -627,14 +693,16 @@ struct LiveSessionInfo {
     pane_cwd: String,
     started_at: u64,
     agent: AgentKind,
+    jsonl_path: Option<PathBuf>,
 }
 
 /// Build a map from session_id -> live session info.
 ///
 /// Joins multiple sources:
-///   - tmux list-panes: discover agent panes (Claude and Codex)
+///   - tmux list-panes: discover agent panes (Claude, Codex, OMP)
 ///   - ~/.claude/sessions/{PID}.json: PID -> (session_id, started_at) for Claude
 ///   - Codex SQLite DB: session metadata for Codex
+///   - ~/.omp/agent/terminal-sessions/{tty}: TTY -> jsonl for OMP
 fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
     let pid_session_map = read_pid_session_map();
     let tmux_panes = discover_agent_tmux_panes();
@@ -656,6 +724,7 @@ fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
                             pane_cwd: pane.pane_cwd,
                             started_at: info.started_at,
                             agent: AgentKind::Claude,
+                            jsonl_path: None,
                         },
                     );
                 } else {
@@ -674,6 +743,7 @@ fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
                             pane_cwd: pane.pane_cwd,
                             started_at: 0,
                             agent: AgentKind::Claude,
+                            jsonl_path: None,
                         },
                     );
                 }
@@ -697,6 +767,37 @@ fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
                             pane_cwd: pane.pane_cwd,
                             started_at,
                             agent: AgentKind::Codex,
+                            jsonl_path: None,
+                        },
+                    );
+                }
+            }
+            AgentKind::Omp => {
+                if let Some(jsonl_path) = pane.omp_jsonl_path {
+                    let session_id = jsonl_path
+                        .to_str()
+                        .and_then(crate::omp::session_id_from_jsonl_path)
+                        .unwrap_or_else(|| format!("omp-{}", pane.pane_target));
+                    let started_at = jsonl_path
+                        .metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    map.insert(
+                        session_id,
+                        LiveSessionInfo {
+                            pid: pane.pid,
+                            tmux_session: pane.tmux_session,
+                            tmux_window: pane.tmux_window,
+                            pane_target: pane.pane_target,
+                            pane_id: pane.pane_id,
+                            scheduled_continue_at: pane.scheduled_continue_at,
+                            pane_cwd: pane.pane_cwd,
+                            started_at,
+                            agent: AgentKind::Omp,
+                            jsonl_path: Some(jsonl_path),
                         },
                     );
                 }
@@ -1263,8 +1364,6 @@ fn find_jsonl_by_session_id(session_id: &str) -> Option<PathBuf> {
     best.map(|(p, _)| p)
 }
 
-/// Find the cwd used by an existing session (by scanning its JSONL for a cwd entry).
-/// Used by the resume command to start the tmux session in the right directory.
 /// Return session-id → tmux info for all currently live claude sessions.
 /// Used by the resume picker to filter out still-running sessions.
 pub fn build_live_session_map_public() -> HashMap<String, String> {
@@ -1361,6 +1460,10 @@ fn inspect_session_pane(
             AgentKind::Claude => inspect_claude_pane(target, reference, scheduled_continue_at),
             AgentKind::Codex => PaneInspection {
                 status: crate::codex::codex_pane_status(target),
+                visible_title: None,
+            },
+            AgentKind::Omp => PaneInspection {
+                status: crate::omp::omp_pane_status(target),
                 visible_title: None,
             },
         };
@@ -1678,12 +1781,13 @@ struct TmuxPaneRow<'a> {
     window_name: &'a str,
     pane_id: &'a str,
     scheduled_continue_at: Option<i64>,
+    pane_tty: &'a str,
 }
 
 fn parse_tmux_pane_row(line: &str) -> Option<TmuxPaneRow<'_>> {
     // Preserve an empty final option field while requiring the complete tmux format.
-    let parts: Vec<&str> = line.splitn(9, "|||").collect();
-    if parts.len() != 9 {
+    let parts: Vec<&str> = line.splitn(10, "|||").collect();
+    if parts.len() != 10 {
         return None;
     }
 
@@ -1697,10 +1801,11 @@ fn parse_tmux_pane_row(line: &str) -> Option<TmuxPaneRow<'_>> {
         window_name: parts[6],
         pane_id: parts[7],
         scheduled_continue_at: parts[8].parse().ok(),
+        pane_tty: parts[9],
     })
 }
 
-/// A discovered tmux pane running a code agent (Claude or Codex).
+/// A discovered tmux pane running a code agent (Claude, Codex, or OMP).
 struct DiscoveredPane {
     pid: i32,
     tmux_session: String,
@@ -1711,16 +1816,17 @@ struct DiscoveredPane {
     pane_cwd: String,
     agent: AgentKind,
     codex_session_id: Option<String>,
+    omp_jsonl_path: Option<PathBuf>,
 }
 
-/// Get tmux panes running code agents (Claude or Codex).
+/// Get tmux panes running code agents (Claude, Codex, or OMP).
 fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
     let output = match std::process::Command::new("tmux")
         .args([
             "list-panes",
             "-a",
             "-F",
-            "#{pane_pid}|||#{session_name}|||#{pane_current_command}|||#{pane_current_path}|||#{window_index}|||#{pane_index}|||#{window_name}|||#{pane_id}|||#{@recon_continue_at}",
+            "#{pane_pid}|||#{session_name}|||#{pane_current_command}|||#{pane_current_path}|||#{window_index}|||#{pane_index}|||#{window_name}|||#{pane_id}|||#{@recon_continue_at}|||#{pane_tty}",
         ])
         .output()
     {
@@ -1755,8 +1861,8 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
         let window_name = row.window_name;
 
         // Candidate commands: version number (e.g. "2.1.76"), "claude", "claude.exe",
-        // "codex", or "node". On macOS, the npm-distributed binary's internal process
-        // name is "claude.exe" (a bundler convention, not a Windows artifact).
+        // "codex", "node", "bun", or "omp". On macOS, the npm-distributed binary's
+        // internal process name is "claude.exe" (a bundler convention, not Windows).
         let is_candidate = command
             .chars()
             .next()
@@ -1765,7 +1871,9 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
             || command == "claude"
             || command == "claude.exe"
             || command == "codex"
-            || command == "node";
+            || command == "node"
+            || command == "bun"
+            || command == "omp";
 
         let is_shell = command == "bash" || command == "sh" || command == "zsh";
 
@@ -1787,6 +1895,7 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
                 pane_cwd: pane_path.to_string(),
                 agent: AgentKind::Claude,
                 codex_session_id: None,
+                omp_jsonl_path: None,
             });
             continue;
         }
@@ -1805,6 +1914,26 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
                     pane_cwd: pane_path.to_string(),
                     agent: AgentKind::Codex,
                     codex_session_id: Some(session_id),
+                    omp_jsonl_path: None,
+                });
+                continue;
+            }
+        }
+
+        // bun/omp panes: join via pane TTY → ~/.omp/agent/terminal-sessions/{tty}
+        if command == "bun" || command == "omp" {
+            if let Some(sess) = crate::omp::find_omp_session(row.pane_tty) {
+                results.push(DiscoveredPane {
+                    pid,
+                    tmux_session: session_name.to_string(),
+                    tmux_window: window_name.to_string(),
+                    pane_target,
+                    pane_id: row.pane_id.to_string(),
+                    scheduled_continue_at: row.scheduled_continue_at,
+                    pane_cwd: pane_path.to_string(),
+                    agent: AgentKind::Omp,
+                    codex_session_id: None,
+                    omp_jsonl_path: Some(sess.jsonl_path),
                 });
                 continue;
             }
@@ -1823,8 +1952,8 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
                 pane_cwd: pane_path.to_string(),
                 agent: AgentKind::Claude,
                 codex_session_id: None,
+                omp_jsonl_path: None,
             });
-
         }
     }
 
@@ -2030,7 +2159,7 @@ Esc to cancel
     fn tmux_pane_row_includes_immutable_id_and_schedule() {
         // Discovery must retain tmux's stable pane ID and pane-local deadline option.
         let row = parse_tmux_pane_row(
-            "123|||W|||claude|||/tmp|||1|||0|||win|||%42|||1783980600",
+            "123|||W|||claude|||/tmp|||1|||0|||win|||%42|||1783980600|||/dev/ttys010",
         )
         .unwrap();
 
@@ -2039,6 +2168,7 @@ Esc to cancel
         assert_eq!(row.window_name, "win");
         assert_eq!(row.pane_id, "%42");
         assert_eq!(row.scheduled_continue_at, Some(1_783_980_600));
+        assert_eq!(row.pane_tty, "/dev/ttys010");
         assert!(parse_tmux_pane_row("123|||missing-fields").is_none());
     }
 

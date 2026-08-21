@@ -39,6 +39,10 @@ pub fn park() {
         .sessions
         .iter()
         .filter_map(|s| {
+            // v1: OMP has no resume/park path. Leave those panes running.
+            if s.agent == crate::session::AgentKind::Omp {
+                return None;
+            }
             // Determine the resume ID:
             // - For Codex: use session_id directly (the jsonl_path stem is a rollout
             //   filename, not the session UUID that codex --session expects).
@@ -60,6 +64,7 @@ pub fn park() {
                 agent: match s.agent {
                     crate::session::AgentKind::Claude => "claude".to_string(),
                     crate::session::AgentKind::Codex => "codex".to_string(),
+                    crate::session::AgentKind::Omp => "omp".to_string(),
                 },
             })
         })
