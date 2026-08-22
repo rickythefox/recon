@@ -144,8 +144,13 @@ pub fn parse_context_footer(content: &str) -> Option<OmpTokenInfo> {
     None
 }
 
-/// Parse one `◫ N%/window` marker. Uses the last ◫ on the line.
+/// Parse one footer context marker. Prefers `◫ N%/window`, then `▶ N% ┃ window ◀`.
 fn parse_context_marker(line: &str) -> Option<OmpTokenInfo> {
+    parse_diamond_context(line).or_else(|| parse_bar_context(line))
+}
+
+/// Legacy footer: `◫ 23.0%/500K`.
+fn parse_diamond_context(line: &str) -> Option<OmpTokenInfo> {
     let marker = line.rfind('\u{25EB}')?; // ◫
     let after = line[marker + '\u{25EB}'.len_utf8()..].trim_start();
     let pct_end = after.find('%')?;
@@ -155,12 +160,40 @@ fn parse_context_marker(line: &str) -> Option<OmpTokenInfo> {
     let win_end = rest
         .find(|c: char| c.is_whitespace() || "⟲>├│╮╭─".contains(c))
         .unwrap_or(rest.len());
-    let window = parse_token_window(rest[..win_end].trim())?;
+    tokens_from_percent(pct, rest[..win_end].trim())
+}
+
+/// Current footer: `▶─────34%─────┃─500K─◀`.
+fn parse_bar_context(line: &str) -> Option<OmpTokenInfo> {
+    if !(line.contains('\u{25B6}') && line.contains('\u{25C0}')) {
+        return None;
+    }
+    let pct_end = line.rfind('%')?;
+    let pct = trailing_number(&line[..pct_end])?;
+    let window_raw = line[pct_end + 1..]
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '.')
+        .find(|part| parse_token_window(part).is_some())?;
+    tokens_from_percent(pct, window_raw)
+}
+
+fn tokens_from_percent(pct: f64, window_raw: &str) -> Option<OmpTokenInfo> {
+    let window = parse_token_window(window_raw)?;
     let used = ((pct / 100.0) * window as f64).round() as u64;
     Some(OmpTokenInfo {
         used_tokens: used,
         context_window: window,
     })
+}
+
+/// Digits (and one decimal) immediately before `end` of `s`.
+fn trailing_number(s: &str) -> Option<f64> {
+    let start = s
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_ascii_digit() || *c == '.')
+        .last()
+        .map(|(i, _)| i)?;
+    s[start..].parse().ok()
 }
 
 /// `500K` → 500_000, `1M` → 1_000_000, bare digits as-is.
@@ -328,6 +361,17 @@ mod tests {
         let tokens = parse_context_footer(content).unwrap();
         assert_eq!(tokens.context_window, 500_000);
         assert_eq!(tokens.used_tokens, 188_500);
+    }
+
+    #[test]
+    fn footer_parses_bar_percent_and_window() {
+        let content = "\
+╭── π  > ⬢ Grok 4.6 👁 · ◒ high > 📁 ~/src/luna > ⑂ main > ▶─────34%─────┃─500K─◀ Format Claude logs with jq ──╮
+╰─                                                                                                                              ─╯
+";
+        let tokens = parse_context_footer(content).unwrap();
+        assert_eq!(tokens.context_window, 500_000);
+        assert_eq!(tokens.used_tokens, 170_000);
     }
 
     #[test]

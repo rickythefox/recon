@@ -1467,13 +1467,11 @@ fn inspect_session_pane(
                 visible_title: None,
             },
         };
-        // Only show New if pane also looks idle (no active streaming)
-        if input_tokens == 0
-            && output_tokens == 0
-            && inspection.status == SessionStatus::Idle
-        {
-            inspection.status = SessionStatus::New;
-        }
+        // Claude uses 0 tokens as "never interacted". OMP live rows are
+        // discovered from an existing jsonl, so a missing footer parse is
+        // Idle, not New.
+        inspection.status =
+            finalize_live_status(agent, inspection.status, input_tokens, output_tokens);
         return inspection;
     }
 
@@ -1485,6 +1483,23 @@ fn inspect_session_pane(
     PaneInspection {
         status,
         visible_title: None,
+    }
+}
+
+/// Claude treats unused tokens + Idle as New. OMP sessions already exist on disk.
+fn finalize_live_status(
+    agent: &AgentKind,
+    status: SessionStatus,
+    input_tokens: u64,
+    output_tokens: u64,
+) -> SessionStatus {
+    if matches!(agent, AgentKind::Omp) {
+        return status;
+    }
+    if input_tokens == 0 && output_tokens == 0 && status == SessionStatus::Idle {
+        SessionStatus::New
+    } else {
+        status
     }
 }
 
@@ -1979,6 +1994,31 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use std::io::{BufReader, Cursor};
+
+
+    #[test]
+    fn omp_idle_with_zero_tokens_stays_idle() {
+        assert_eq!(
+            finalize_live_status(&AgentKind::Omp, SessionStatus::Idle, 0, 0),
+            SessionStatus::Idle
+        );
+    }
+
+    #[test]
+    fn omp_working_with_zero_tokens_stays_working() {
+        assert_eq!(
+            finalize_live_status(&AgentKind::Omp, SessionStatus::Working, 0, 0),
+            SessionStatus::Working
+        );
+    }
+
+    #[test]
+    fn claude_idle_with_zero_tokens_is_new() {
+        assert_eq!(
+            finalize_live_status(&AgentKind::Claude, SessionStatus::Idle, 0, 0),
+            SessionStatus::New
+        );
+    }
 
     #[test]
     fn read_line_capped_normal() {
