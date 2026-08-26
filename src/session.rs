@@ -128,6 +128,7 @@ pub struct Session {
     pub relative_dir: Option<String>,
     pub tmux_session: Option<String>,
     pub tmux_window: Option<String>,
+    pub window_automatic_rename: bool,
     pub pane_target: Option<String>,
     pub pane_id: Option<String>,
     pub model: Option<String>,
@@ -354,6 +355,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 relative_dir,
                 tmux_session: Some(live.tmux_session.clone()),
                 tmux_window: Some(live.tmux_window.clone()),
+                window_automatic_rename: live.window_automatic_rename,
                 pane_target: Some(live.pane_target.clone()),
                 pane_id: Some(live.pane_id.clone()),
                 model: info.model,
@@ -466,6 +468,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 cwd,
                 tmux_session: Some(live.tmux_session.clone()),
                 tmux_window: Some(live.tmux_window.clone()),
+                window_automatic_rename: live.window_automatic_rename,
                 pane_target: Some(live.pane_target.clone()),
                 pane_id: Some(live.pane_id.clone()),
                 model: info.model,
@@ -507,6 +510,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                 cwd: live.pane_cwd.clone(),
                 tmux_session: Some(live.tmux_session.clone()),
                 tmux_window: Some(live.tmux_window.clone()),
+                window_automatic_rename: live.window_automatic_rename,
                 pane_target: Some(live.pane_target.clone()),
                 pane_id: Some(live.pane_id.clone()),
                 model: None,
@@ -576,6 +580,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
             relative_dir,
             tmux_session: Some(live.tmux_session.clone()),
             tmux_window: Some(live.tmux_window.clone()),
+            window_automatic_rename: live.window_automatic_rename,
             pane_target: Some(live.pane_target.clone()),
             pane_id: Some(live.pane_id.clone()),
             model: meta.as_ref().and_then(|m| m.model.clone()),
@@ -645,6 +650,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
             relative_dir,
             tmux_session: Some(live.tmux_session.clone()),
             tmux_window: Some(live.tmux_window.clone()),
+            window_automatic_rename: live.window_automatic_rename,
             pane_target: Some(live.pane_target.clone()),
             pane_id: Some(live.pane_id.clone()),
             model,
@@ -687,6 +693,7 @@ struct LiveSessionInfo {
     pid: i32,
     tmux_session: String,
     tmux_window: String,
+    window_automatic_rename: bool,
     pane_target: String,
     pane_id: String,
     scheduled_continue_at: Option<i64>,
@@ -718,6 +725,7 @@ fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
                             pid: pane.pid,
                             tmux_session: pane.tmux_session,
                             tmux_window: pane.tmux_window,
+                            window_automatic_rename: pane.window_automatic_rename,
                             pane_target: pane.pane_target,
                             pane_id: pane.pane_id,
                             scheduled_continue_at: pane.scheduled_continue_at,
@@ -737,6 +745,7 @@ fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
                             pid: pane.pid,
                             tmux_session: pane.tmux_session,
                             tmux_window: pane.tmux_window,
+                            window_automatic_rename: pane.window_automatic_rename,
                             pane_target: pane.pane_target,
                             pane_id: pane.pane_id,
                             scheduled_continue_at: pane.scheduled_continue_at,
@@ -761,6 +770,7 @@ fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
                             pid: pane.pid,
                             tmux_session: pane.tmux_session,
                             tmux_window: pane.tmux_window,
+                            window_automatic_rename: pane.window_automatic_rename,
                             pane_target: pane.pane_target,
                             pane_id: pane.pane_id,
                             scheduled_continue_at: pane.scheduled_continue_at,
@@ -791,6 +801,7 @@ fn build_live_session_map() -> HashMap<String, LiveSessionInfo> {
                             pid: pane.pid,
                             tmux_session: pane.tmux_session,
                             tmux_window: pane.tmux_window,
+                            window_automatic_rename: pane.window_automatic_rename,
                             pane_target: pane.pane_target,
                             pane_id: pane.pane_id,
                             scheduled_continue_at: pane.scheduled_continue_at,
@@ -1794,15 +1805,16 @@ struct TmuxPaneRow<'a> {
     window_index: &'a str,
     pane_index: &'a str,
     window_name: &'a str,
+    window_automatic_rename: bool,
     pane_id: &'a str,
     scheduled_continue_at: Option<i64>,
     pane_tty: &'a str,
 }
 
 fn parse_tmux_pane_row(line: &str) -> Option<TmuxPaneRow<'_>> {
-    // Preserve an empty final option field while requiring the complete tmux format.
-    let parts: Vec<&str> = line.splitn(10, "|||").collect();
-    if parts.len() != 10 {
+    // Last field is #{automatic-rename} (#{window_automatic_rename} is empty on tmux 3.7).
+    let parts: Vec<&str> = line.splitn(11, "|||").collect();
+    if parts.len() != 11 {
         return None;
     }
 
@@ -1817,6 +1829,8 @@ fn parse_tmux_pane_row(line: &str) -> Option<TmuxPaneRow<'_>> {
         pane_id: parts[7],
         scheduled_continue_at: parts[8].parse().ok(),
         pane_tty: parts[9],
+        // Only an explicit 0 means the user renamed the window.
+        window_automatic_rename: parts[10] != "0",
     })
 }
 
@@ -1825,6 +1839,7 @@ struct DiscoveredPane {
     pid: i32,
     tmux_session: String,
     tmux_window: String,
+    window_automatic_rename: bool,
     pane_target: String,
     pane_id: String,
     scheduled_continue_at: Option<i64>,
@@ -1841,7 +1856,7 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
             "list-panes",
             "-a",
             "-F",
-            "#{pane_pid}|||#{session_name}|||#{pane_current_command}|||#{pane_current_path}|||#{window_index}|||#{pane_index}|||#{window_name}|||#{pane_id}|||#{@recon_continue_at}|||#{pane_tty}",
+            "#{pane_pid}|||#{session_name}|||#{pane_current_command}|||#{pane_current_path}|||#{window_index}|||#{pane_index}|||#{window_name}|||#{pane_id}|||#{@recon_continue_at}|||#{pane_tty}|||#{automatic-rename}",
         ])
         .output()
     {
@@ -1904,6 +1919,7 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
                 pid,
                 tmux_session: session_name.to_string(),
                 tmux_window: window_name.to_string(),
+                window_automatic_rename: row.window_automatic_rename,
                 pane_target,
                 pane_id: row.pane_id.to_string(),
                 scheduled_continue_at: row.scheduled_continue_at,
@@ -1923,6 +1939,7 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
                     pid: codex_pid,
                     tmux_session: session_name.to_string(),
                     tmux_window: window_name.to_string(),
+                    window_automatic_rename: row.window_automatic_rename,
                     pane_target,
                     pane_id: row.pane_id.to_string(),
                     scheduled_continue_at: row.scheduled_continue_at,
@@ -1942,6 +1959,7 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
                     pid,
                     tmux_session: session_name.to_string(),
                     tmux_window: window_name.to_string(),
+                    window_automatic_rename: row.window_automatic_rename,
                     pane_target,
                     pane_id: row.pane_id.to_string(),
                     scheduled_continue_at: row.scheduled_continue_at,
@@ -1961,6 +1979,7 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
                 pid: claude_pid,
                 tmux_session: session_name.to_string(),
                 tmux_window: window_name.to_string(),
+                window_automatic_rename: row.window_automatic_rename,
                 pane_target,
                 pane_id: row.pane_id.to_string(),
                 scheduled_continue_at: row.scheduled_continue_at,
@@ -2199,7 +2218,7 @@ Esc to cancel
     fn tmux_pane_row_includes_immutable_id_and_schedule() {
         // Discovery must retain tmux's stable pane ID and pane-local deadline option.
         let row = parse_tmux_pane_row(
-            "123|||W|||claude|||/tmp|||1|||0|||win|||%42|||1783980600|||/dev/ttys010",
+            "123|||W|||claude|||/tmp|||1|||0|||win|||%42|||1783980600|||/dev/ttys010|||1",
         )
         .unwrap();
 
@@ -2210,6 +2229,28 @@ Esc to cancel
         assert_eq!(row.scheduled_continue_at, Some(1_783_980_600));
         assert_eq!(row.pane_tty, "/dev/ttys010");
         assert!(parse_tmux_pane_row("123|||missing-fields").is_none());
+    }
+
+    #[test]
+    fn tmux_pane_row_reads_automatic_rename_flag() {
+        // User-set names are automatic-rename=0; live panes always emit window_name.
+        let renamed = parse_tmux_pane_row(
+            "123|||W|||claude|||/tmp|||1|||0|||Rebecca|||%42|||1783980600|||/dev/ttys010|||0",
+        )
+        .unwrap();
+        assert_eq!(renamed.window_name, "Rebecca");
+        assert!(!renamed.window_automatic_rename);
+
+        let auto = parse_tmux_pane_row(
+            "123|||W|||claude|||/tmp|||1|||0|||omp|||%42|||1783980600|||/dev/ttys010|||1",
+        )
+        .unwrap();
+        assert_eq!(auto.window_name, "omp");
+        assert!(auto.window_automatic_rename);
+        assert!(parse_tmux_pane_row(
+            "123|||W|||claude|||/tmp|||1|||0|||win|||%42|||1783980600|||/dev/ttys010"
+        )
+        .is_none());
     }
 
     #[test]

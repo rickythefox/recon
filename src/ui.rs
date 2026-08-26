@@ -121,16 +121,23 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 .unwrap_or_else(|| "—".to_string());
 
             // Project spans two lines:
-            //   line 1: repo::relative_dir
+            //   line 1: user-set tmux window, else repo::relative_dir
             //   line 2: session title, then branch (if any)
             // Each line is a styled-char sequence so it can marquee-scroll.
             let project_cell = {
-                // Line 1: repo path
+                // Line 1: user-set tmux window, else repo path
                 let mut line1: Vec<StyledChar> = Vec::new();
-                push_segment(&mut line1, &session.project_name, Style::default());
-                if let Some(dir) = &session.relative_dir {
-                    push_segment(&mut line1, "::", Style::default().fg(dim));
-                    push_segment(&mut line1, dir, Style::default().fg(Color::Cyan));
+                if let Some(window) = user_set_tmux_window(
+                    session.tmux_window.as_deref(),
+                    session.window_automatic_rename,
+                ) {
+                    push_segment(&mut line1, window, Style::default());
+                } else {
+                    push_segment(&mut line1, &session.project_name, Style::default());
+                    if let Some(dir) = &session.relative_dir {
+                        push_segment(&mut line1, "::", Style::default().fg(dim));
+                        push_segment(&mut line1, dir, Style::default().fg(Color::Cyan));
+                    }
                 }
 
                 // Line 2: session title followed by branch
@@ -306,7 +313,34 @@ fn status_content(dot: &str, color: Color, label: &str) -> Vec<StyledChar> {
     content
 }
 
+/// User-renamed tmux window, if automatic-rename is off and the name is non-empty.
+fn user_set_tmux_window<'a>(name: Option<&'a str>, automatic_rename: bool) -> Option<&'a str> {
+    let name = name.map(str::trim).filter(|s| !s.is_empty())?;
+    if automatic_rename {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// First line of the Project column: renamed window, else repo plus relative dir.
+#[cfg(test)]
+fn project_column_heading(
+    project_name: &str,
+    relative_dir: Option<&str>,
+    tmux_window: Option<&str>,
+    window_automatic_rename: bool,
+) -> String {
+    if let Some(window) = user_set_tmux_window(tmux_window, window_automatic_rename) {
+        return window.to_string();
+    }
+    match relative_dir.filter(|dir| !dir.is_empty()) {
+        Some(dir) => format!("{project_name}::{dir}"),
+        None => project_name.to_string(),
+    }
+}
 /// Return the branch name unless it is a default branch worth hiding.
+
 fn visible_branch(branch: &Option<String>) -> Option<&str> {
     branch
         .as_deref()
@@ -587,5 +621,39 @@ mod tests {
             18
         );
         assert_eq!(configured_width(&widths, Column::Window, 24), 24);
+    }
+
+    #[test]
+    fn project_heading_uses_user_set_window_name() {
+        // A renamed window must replace the repo/dir heading.
+        assert_eq!(
+            project_column_heading("worko", None, Some("Rebecca"), false),
+            "Rebecca"
+        );
+        assert_eq!(
+            project_column_heading("worko", Some("tools/cli"), Some("wor-158"), false),
+            "wor-158"
+        );
+    }
+
+    #[test]
+    fn project_heading_keeps_dir_when_window_is_auto_named() {
+        // Live panes always have #{window_name}; automatic-rename means unset.
+        assert_eq!(
+            project_column_heading("worko", None, Some("omp"), true),
+            "worko"
+        );
+        assert_eq!(
+            project_column_heading("worko", Some("tools/cli"), Some("omp"), true),
+            "worko::tools/cli"
+        );
+        assert_eq!(
+            project_column_heading("recon", None, None, false),
+            "recon"
+        );
+        assert_eq!(
+            project_column_heading("worko", None, Some("   "), false),
+            "worko"
+        );
     }
 }

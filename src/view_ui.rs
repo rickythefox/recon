@@ -716,6 +716,7 @@ mod tests {
             relative_dir: None,
             tmux_session: None,
             tmux_window: None,
+            window_automatic_rename: true,
             pane_target: None,
             pane_id: None,
             model: None,

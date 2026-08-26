@@ -659,6 +659,7 @@ mod tests {
             relative_dir: None,
             tmux_session: Some(format!("tmux-{id}")),
             tmux_window: None,
+            window_automatic_rename: true,
             pane_target: None,
             pane_id: Some("%42".to_string()),
             model: None,
