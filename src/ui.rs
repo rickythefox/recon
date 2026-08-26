@@ -339,8 +339,8 @@ fn project_column_heading(
         None => project_name.to_string(),
     }
 }
-/// Return the branch name unless it is a default branch worth hiding.
 
+/// Return the branch name unless it is a default branch worth hiding.
 fn visible_branch(branch: &Option<String>) -> Option<&str> {
     branch
         .as_deref()
@@ -647,10 +647,7 @@ mod tests {
             project_column_heading("worko", Some("tools/cli"), Some("omp"), true),
             "worko::tools/cli"
         );
-        assert_eq!(
-            project_column_heading("recon", None, None, false),
-            "recon"
-        );
+        assert_eq!(project_column_heading("recon", None, None, false), "recon");
         assert_eq!(
             project_column_heading("worko", None, Some("   "), false),
             "worko"
