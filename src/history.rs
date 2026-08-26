@@ -121,7 +121,8 @@ fn find_resumable_codex_sessions(live_ids: &HashSet<String>) -> Vec<ResumeEntry>
         return vec![];
     }
 
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = match rusqlite::Connection::open_with_flags(&db_path, flags) {
         Ok(c) => c,
         Err(_) => return vec![],
@@ -140,7 +141,7 @@ fn find_resumable_codex_sessions(live_ids: &HashSet<String>) -> Vec<ResumeEntry>
          FROM threads \
          WHERE is_archived = 0 AND updated_at > ?1 AND tokens_used > 0 \
          ORDER BY updated_at DESC \
-         LIMIT 20"
+         LIMIT 20",
     ) {
         Ok(s) => s,
         Err(_) => return vec![],
@@ -292,7 +293,10 @@ pub fn run_resume_picker() -> io::Result<Option<(String, String, AgentKind)>> {
 
                         let row = Row::new(vec![
                             Cell::from(format!(" {} ", i + 1)),
-                            Cell::from(Span::styled(short_id.to_string(), Style::default().fg(id_color))),
+                            Cell::from(Span::styled(
+                                short_id.to_string(),
+                                Style::default().fg(id_color),
+                            )),
                             project_cell,
                             Cell::from(model_display),
                             Cell::from(tokens),

@@ -57,9 +57,17 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
         first.is_some() && !names.all(|n| Some(n) == first)
     };
     let project_width = project_column_width(area.width, show_session_col, app);
-    let status_width = configured_width(&app.config.table.widths, Column::Status, STATUS_COLUMN_WIDTH);
+    let status_width = configured_width(
+        &app.config.table.widths,
+        Column::Status,
+        STATUS_COLUMN_WIDTH,
+    );
     let model_width = configured_width(&app.config.table.widths, Column::Model, MODEL_COLUMN_WIDTH);
-    let activity_width = configured_width(&app.config.table.widths, Column::LastActivity, ACTIVITY_COLUMN_WIDTH);
+    let activity_width = configured_width(
+        &app.config.table.widths,
+        Column::LastActivity,
+        ACTIVITY_COLUMN_WIDTH,
+    );
 
     let mut header_cells = vec![Cell::from(if show_session_col { " #/S" } else { " # " })];
     header_cells.extend([
@@ -207,12 +215,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 Line::from(Span::styled(session.token_display(), token_style)),
             ]));
 
-            cells.extend([
-                project_cell,
-                status_cell,
-                model_cell,
-                Cell::from(activity),
-            ]);
+            cells.extend([project_cell, status_cell, model_cell, Cell::from(activity)]);
             let row = Row::new(cells).height(ROW_HEIGHT);
 
             if session.status == SessionStatus::Input {
@@ -227,13 +230,21 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
 
     // Id column holds the number, plus the session name on line 2 when shown
     let id_width = if show_session_col {
-        configured_width(&app.config.table.widths, Column::Session, SESSION_COLUMN_WIDTH)
+        configured_width(
+            &app.config.table.widths,
+            Column::Session,
+            SESSION_COLUMN_WIDTH,
+        )
     } else {
         NUMBER_COLUMN_WIDTH
     };
     let mut widths = vec![Constraint::Length(id_width)];
     widths.extend([
-        Constraint::Min(configured_width(&app.config.table.widths, Column::Project, 20)),
+        Constraint::Min(configured_width(
+            &app.config.table.widths,
+            Column::Project,
+            20,
+        )),
         Constraint::Length(status_width),
         Constraint::Length(model_width),
         Constraint::Length(activity_width),
@@ -244,7 +255,11 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
     // divided by the per-row height.
     let capacity = (area.height.saturating_sub(3) / ROW_HEIGHT) as usize;
     let offset = scroll_offset(app.selected, capacity, rows.len());
-    let visible_rows: Vec<Row> = rows.into_iter().skip(offset).take(capacity.max(1)).collect();
+    let visible_rows: Vec<Row> = rows
+        .into_iter()
+        .skip(offset)
+        .take(capacity.max(1))
+        .collect();
 
     let table = Table::new(visible_rows, widths)
         .header(header)
@@ -271,7 +286,11 @@ fn scroll_offset(selected: usize, capacity: usize, total: usize) -> usize {
 fn project_column_width(area_width: u16, show_session_col: bool, app: &App) -> usize {
     // Id column width: wider when it also carries the session name on line 2
     let id_width = if show_session_col {
-        configured_width(&app.config.table.widths, Column::Session, SESSION_COLUMN_WIDTH)
+        configured_width(
+            &app.config.table.widths,
+            Column::Session,
+            SESSION_COLUMN_WIDTH,
+        )
     } else {
         NUMBER_COLUMN_WIDTH
     };
@@ -279,9 +298,17 @@ fn project_column_width(area_width: u16, show_session_col: bool, app: &App) -> u
     let column_count = 5;
     let fixed_width = TABLE_BORDER_WIDTH
         + id_width
-        + configured_width(&app.config.table.widths, Column::Status, STATUS_COLUMN_WIDTH)
+        + configured_width(
+            &app.config.table.widths,
+            Column::Status,
+            STATUS_COLUMN_WIDTH,
+        )
         + configured_width(&app.config.table.widths, Column::Model, MODEL_COLUMN_WIDTH)
-        + configured_width(&app.config.table.widths, Column::LastActivity, ACTIVITY_COLUMN_WIDTH)
+        + configured_width(
+            &app.config.table.widths,
+            Column::LastActivity,
+            ACTIVITY_COLUMN_WIDTH,
+        )
         + TABLE_COLUMN_SPACING * (column_count - 1);
 
     area_width.saturating_sub(fixed_width) as usize
@@ -342,9 +369,7 @@ fn project_column_heading(
 
 /// Return the branch name unless it is a default branch worth hiding.
 fn visible_branch(branch: &Option<String>) -> Option<&str> {
-    branch
-        .as_deref()
-        .filter(|b| *b != "main" && *b != "master")
+    branch.as_deref().filter(|b| *b != "main" && *b != "master")
 }
 
 /// Window `content` to `width`, marquee-scrolling the active row when it
@@ -437,7 +462,11 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled("1-0", Style::default().fg(Color::Cyan)),
             Span::raw(" switch  "),
             Span::styled(
-                if app.shift_enter_zoom { "S-Enter" } else { "C-j" },
+                if app.shift_enter_zoom {
+                    "S-Enter"
+                } else {
+                    "C-j"
+                },
                 Style::default().fg(Color::Cyan),
             ),
             Span::raw(" zoom  "),

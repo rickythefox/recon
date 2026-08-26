@@ -317,10 +317,7 @@ mod tests {
 ";
         let parsed = parse_terminal_session(content).unwrap();
         assert_eq!(parsed.cwd, "/Users/richard/src/oss/recon");
-        assert_eq!(
-            parsed.session_id,
-            "01a02415-a891-7000-b483-5c69057c247e"
-        );
+        assert_eq!(parsed.session_id, "01a02415-a891-7000-b483-5c69057c247e");
     }
 
     #[test]
@@ -341,7 +338,8 @@ mod tests {
 
     #[test]
     fn footer_parses_percent_of_500k_window() {
-        let content = "╭── π  > ⬢ Grok 4.6 👁 · ◒ high > 📁 ~/src/oss/recon > ◫ 23.0%/500K ⟲ > (sub) ──╮";
+        let content =
+            "╭── π  > ⬢ Grok 4.6 👁 · ◒ high > 📁 ~/src/oss/recon > ◫ 23.0%/500K ⟲ > (sub) ──╮";
         let tokens = parse_context_footer(content).unwrap();
         assert_eq!(tokens.context_window, 500_000);
         assert_eq!(tokens.used_tokens, 115_000);

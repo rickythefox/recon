@@ -17,8 +17,14 @@ pub fn load() -> SavedState {
     let data = fs::read_to_string(state_path()).unwrap_or_default();
     let v: serde_json::Value = serde_json::from_str(&data).unwrap_or_default();
     SavedState {
-        last_session_id: v.get("last_session_id").and_then(|s| s.as_str()).map(|s| s.to_string()),
-        prev_session_id: v.get("prev_session_id").and_then(|s| s.as_str()).map(|s| s.to_string()),
+        last_session_id: v
+            .get("last_session_id")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string()),
+        prev_session_id: v
+            .get("prev_session_id")
+            .and_then(|s| s.as_str())
+            .map(|s| s.to_string()),
     }
 }
 

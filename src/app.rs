@@ -31,7 +31,7 @@ pub struct App {
     last_session_id: Option<String>,      // restored from ~/.config/recon/state.json
     prev_session_id: Option<String>,      // for 'b' to toggle back
     prev_sessions: HashMap<String, Session>,
-    pub shift_enter_zoom: bool,           // kitty maps Shift+Enter -> Ctrl+J (zoom label)
+    pub shift_enter_zoom: bool, // kitty maps Shift+Enter -> Ctrl+J (zoom label)
 }
 
 impl App {
@@ -282,7 +282,10 @@ impl App {
             KeyCode::Char('b') => {
                 if let Some(ref prev_id) = self.prev_session_id.clone() {
                     let filtered = self.filtered_indices();
-                    if let Some(&real_idx) = filtered.iter().find(|&&ri| self.sessions[ri].session_id == *prev_id) {
+                    if let Some(&real_idx) = filtered
+                        .iter()
+                        .find(|&&ri| self.sessions[ri].session_id == *prev_id)
+                    {
                         self.switch_to_session(real_idx);
                     }
                 }
@@ -322,7 +325,10 @@ impl App {
                 KeyCode::Enter => {
                     if let Some(session) = self.selected_zoomed_session() {
                         if let Some(target) = session.pane_target.clone() {
-                            state::save(&session.session_id.clone(), self.last_session_id.as_deref());
+                            state::save(
+                                &session.session_id.clone(),
+                                self.last_session_id.as_deref(),
+                            );
                             tmux::switch_to_pane(&target);
                             self.should_quit = true;
                         }
@@ -351,7 +357,13 @@ impl App {
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
                             .unwrap_or_else(|| "claude".to_string());
-                        if let Ok(name) = tmux::create_session(&default_name, &cwd, None, &[], &crate::session::AgentKind::Claude) {
+                        if let Ok(name) = tmux::create_session(
+                            &default_name,
+                            &cwd,
+                            None,
+                            &[],
+                            &crate::session::AgentKind::Claude,
+                        ) {
                             tmux::switch_to_pane(&name);
                             self.should_quit = true;
                         }

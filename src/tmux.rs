@@ -27,7 +27,13 @@ pub fn switch_to_pane(target: &str) {
 pub fn zoom_pane(target: &str) {
     // Query whether the target's window is already zoomed (1) or not (0).
     let zoomed = Command::new("tmux")
-        .args(["display-message", "-p", "-t", target, "#{window_zoomed_flag}"])
+        .args([
+            "display-message",
+            "-p",
+            "-t",
+            target,
+            "#{window_zoomed_flag}",
+        ])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "1")
         .unwrap_or(false);
@@ -45,7 +51,13 @@ pub fn zoom_pane(target: &str) {
 /// and passes the parts as the binary + args to tmux (no shell wrapper, so aliases
 /// won't resolve — use full paths).
 /// Returns the session name on success.
-pub fn create_session(name: &str, cwd: &str, command: Option<&str>, tags: &[String], agent: &crate::session::AgentKind) -> Result<String, String> {
+pub fn create_session(
+    name: &str,
+    cwd: &str,
+    command: Option<&str>,
+    tags: &[String],
+    agent: &crate::session::AgentKind,
+) -> Result<String, String> {
     if !session::validate_cwd(cwd) {
         return Err(format!("Invalid working directory: {cwd}"));
     }
@@ -76,8 +88,12 @@ pub fn create_session(name: &str, cwd: &str, command: Option<&str>, tags: &[Stri
         }
         None => {
             let bin = match agent {
-                crate::session::AgentKind::Claude => which_claude().unwrap_or_else(|| "claude".to_string()),
-                crate::session::AgentKind::Codex => which_codex().unwrap_or_else(|| "codex".to_string()),
+                crate::session::AgentKind::Claude => {
+                    which_claude().unwrap_or_else(|| "claude".to_string())
+                }
+                crate::session::AgentKind::Codex => {
+                    which_codex().unwrap_or_else(|| "codex".to_string())
+                }
                 crate::session::AgentKind::Omp => which_omp().unwrap_or_else(|| "omp".to_string()),
             };
             tmux_args.push(bin);
@@ -98,7 +114,11 @@ pub fn create_session(name: &str, cwd: &str, command: Option<&str>, tags: &[Stri
 
 /// Resume a session in a new tmux session. Dispatches to Claude or Codex.
 /// No-op if the session is already running — returns the existing tmux name.
-pub fn resume_session(session_id: &str, name: Option<&str>, agent: &crate::session::AgentKind) -> Result<String, String> {
+pub fn resume_session(
+    session_id: &str,
+    name: Option<&str>,
+    agent: &crate::session::AgentKind,
+) -> Result<String, String> {
     if let Some(existing) = session::find_live_tmux_for_session(session_id) {
         return Ok(existing);
     }
@@ -117,7 +137,11 @@ pub fn resume_session(session_id: &str, name: Option<&str>, agent: &crate::sessi
         }
         crate::session::AgentKind::Omp => None,
     }
-    .or_else(|| std::env::current_dir().map(|p| p.to_string_lossy().to_string()).ok())
+    .or_else(|| {
+        std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .ok()
+    })
     .unwrap_or_else(|| ".".to_string());
 
     let base_name = sanitize_session_name(&tmux_name);
@@ -143,10 +167,15 @@ pub fn resume_session(session_id: &str, name: Option<&str>, agent: &crate::sessi
     // find the right JSONL without parsing process command lines.
     let env_var = format!("RECON_RESUMED_FROM={session_id}");
     let mut tmux_cmd_args = vec![
-        "new-session".to_string(), "-d".to_string(),
-        "-s".to_string(), session_name.clone(),
-        "-c".to_string(), cwd,
-        "-e".to_string(), env_var, bin,
+        "new-session".to_string(),
+        "-d".to_string(),
+        "-s".to_string(),
+        session_name.clone(),
+        "-c".to_string(),
+        cwd,
+        "-e".to_string(),
+        env_var,
+        bin,
     ];
     tmux_cmd_args.extend(args);
 
@@ -211,13 +240,21 @@ fn which_claude() -> Option<String> {
 fn which_codex() -> Option<String> {
     let output = Command::new("which").arg("codex").output().ok()?;
     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() { None } else { Some(path) }
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 fn which_omp() -> Option<String> {
     let output = Command::new("which").arg("omp").output().ok()?;
     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() { None } else { Some(path) }
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
 }
 
 /// Schedule one literal `continue` and Enter in a tmux-owned background job.

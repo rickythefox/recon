@@ -49,7 +49,11 @@ fn includes(contents: &str, dir: &Path) -> Vec<PathBuf> {
         .filter_map(|line| line.strip_prefix("include ").map(str::trim))
         .map(|rel| {
             let p = Path::new(rel);
-            if p.is_absolute() { p.to_path_buf() } else { dir.join(p) }
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                dir.join(p)
+            }
         })
         .collect()
 }
@@ -74,28 +78,38 @@ mod tests {
 
     #[test]
     fn matches_standard_mapping() {
-        assert!(conf_maps_shift_enter_newline("map shift+enter send_text all \\n"));
+        assert!(conf_maps_shift_enter_newline(
+            "map shift+enter send_text all \\n"
+        ));
     }
 
     #[test]
     fn matches_hex_escape_and_indentation() {
-        assert!(conf_maps_shift_enter_newline("   map shift+enter send_text all \\x0a"));
+        assert!(conf_maps_shift_enter_newline(
+            "   map shift+enter send_text all \\x0a"
+        ));
     }
 
     #[test]
     fn ignores_commented_line() {
-        assert!(!conf_maps_shift_enter_newline("# map shift+enter send_text all \\n"));
+        assert!(!conf_maps_shift_enter_newline(
+            "# map shift+enter send_text all \\n"
+        ));
     }
 
     #[test]
     fn ignores_carriage_return_mapping() {
         // \r is Enter (0x0d), not Ctrl+J.
-        assert!(!conf_maps_shift_enter_newline("map shift+enter send_text all \\r"));
+        assert!(!conf_maps_shift_enter_newline(
+            "map shift+enter send_text all \\r"
+        ));
     }
 
     #[test]
     fn ignores_unrelated_mapping() {
-        assert!(!conf_maps_shift_enter_newline("map ctrl+enter send_text all \\n"));
+        assert!(!conf_maps_shift_enter_newline(
+            "map ctrl+enter send_text all \\n"
+        ));
         assert!(!conf_maps_shift_enter_newline("map shift+enter no_op"));
     }
 
@@ -109,9 +123,12 @@ mod tests {
     fn parses_include_directives() {
         let dir = Path::new("/home/x/.config/kitty");
         let incs = includes("include keys.conf\ninclude /abs/extra.conf\n", dir);
-        assert_eq!(incs, vec![
-            PathBuf::from("/home/x/.config/kitty/keys.conf"),
-            PathBuf::from("/abs/extra.conf"),
-        ]);
+        assert_eq!(
+            incs,
+            vec![
+                PathBuf::from("/home/x/.config/kitty/keys.conf"),
+                PathBuf::from("/abs/extra.conf"),
+            ]
+        );
     }
 }

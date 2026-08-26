@@ -89,9 +89,10 @@ fn is_uuid(s: &str) -> bool {
         return false;
     }
     let expected_lens = [8, 4, 4, 4, 12];
-    parts.iter().zip(expected_lens.iter()).all(|(part, &len)| {
-        part.len() == len && part.chars().all(|c| c.is_ascii_hexdigit())
-    })
+    parts
+        .iter()
+        .zip(expected_lens.iter())
+        .all(|(part, &len)| part.len() == len && part.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// Check if a process (or its descendants) is a Codex CLI process.
@@ -143,15 +144,18 @@ pub fn query_session_meta(session_id: &str) -> Option<CodexSessionMeta> {
         return None;
     }
 
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let conn = rusqlite::Connection::open_with_flags(&db_path, flags).ok()?;
     conn.pragma_update(None, "journal_mode", "wal").ok();
 
-    let mut stmt = conn.prepare(
-        "SELECT model, reasoning_effort, cwd, \
+    let mut stmt = conn
+        .prepare(
+            "SELECT model, reasoning_effort, cwd, \
          git_branch, updated_at, created_at, rollout_path, title \
-         FROM threads WHERE id = ?1"
-    ).ok()?;
+         FROM threads WHERE id = ?1",
+        )
+        .ok()?;
 
     stmt.query_row(rusqlite::params![session_id], |row| {
         Ok(CodexSessionMeta {
@@ -164,13 +168,13 @@ pub fn query_session_meta(session_id: &str) -> Option<CodexSessionMeta> {
             rollout_path: row.get(6).ok(),
             title: row.get::<_, String>(7).ok().filter(|s| !s.is_empty()),
         })
-    }).ok()
+    })
+    .ok()
 }
 
 /// Convert a Unix epoch (seconds) to an ISO 8601 string.
 pub fn epoch_to_iso(epoch: u64) -> Option<String> {
-    chrono::DateTime::from_timestamp(epoch as i64, 0)
-        .map(|dt| dt.to_rfc3339())
+    chrono::DateTime::from_timestamp(epoch as i64, 0).map(|dt| dt.to_rfc3339())
 }
 
 /// Find the CWD for a Codex session from SQLite.
@@ -281,7 +285,10 @@ pub fn codex_pane_status(pane_target: &str) -> SessionStatus {
     }
 
     // Input: approval/permission prompts
-    if tail.iter().any(|l| input_patterns.iter().any(|p| l.contains(p))) {
+    if tail
+        .iter()
+        .any(|l| input_patterns.iter().any(|p| l.contains(p)))
+    {
         return SessionStatus::Input;
     }
 
@@ -290,7 +297,11 @@ pub fn codex_pane_status(pane_target: &str) -> SessionStatus {
     // pushed it up, meaning Codex is working.
     for (i, line) in tail.iter().enumerate() {
         if line.starts_with('\u{203A}') {
-            return if i <= 2 { SessionStatus::Idle } else { SessionStatus::Working };
+            return if i <= 2 {
+                SessionStatus::Idle
+            } else {
+                SessionStatus::Working
+            };
         }
     }
 
@@ -310,7 +321,10 @@ mod tests {
     fn extract_uuid_from_rollout_path() {
         let line = "codex  1234  user  txt  REG  /Users/test/.codex/sessions/2026/05/26/rollout-2026-05-26T09-05-13-019e631a-104b-7f73-b26b-d6ea1a6efcd1.jsonl";
         let uuid = extract_rollout_uuid(line);
-        assert_eq!(uuid, Some("019e631a-104b-7f73-b26b-d6ea1a6efcd1".to_string()));
+        assert_eq!(
+            uuid,
+            Some("019e631a-104b-7f73-b26b-d6ea1a6efcd1".to_string())
+        );
     }
 
     #[test]

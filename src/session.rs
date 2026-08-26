@@ -105,9 +105,7 @@ impl SessionStatus {
         // Input needs action now; limit states need visible scheduling attention.
         matches!(
             self,
-            SessionStatus::Input
-                | SessionStatus::Limited(_)
-                | SessionStatus::ContinueScheduled(_)
+            SessionStatus::Input | SessionStatus::Limited(_) | SessionStatus::ContinueScheduled(_)
         )
     }
 }
@@ -162,7 +160,10 @@ impl Session {
     pub fn token_display(&self) -> String {
         let used = self.total_input_tokens + self.total_output_tokens;
         let window = self.context_window.unwrap_or_else(|| {
-            self.model.as_deref().map(model::context_window).unwrap_or(200_000)
+            self.model
+                .as_deref()
+                .map(model::context_window)
+                .unwrap_or(200_000)
         });
         format!("{}k / {}", used / 1000, format_window(window))
     }
@@ -170,7 +171,10 @@ impl Session {
     pub fn token_ratio(&self) -> f64 {
         let used = self.total_input_tokens + self.total_output_tokens;
         let window = self.context_window.unwrap_or_else(|| {
-            self.model.as_deref().map(model::context_window).unwrap_or(200_000)
+            self.model
+                .as_deref()
+                .map(model::context_window)
+                .unwrap_or(200_000)
         });
         if window == 0 {
             return 0.0;
@@ -196,7 +200,6 @@ pub fn format_window(tokens: u64) -> String {
 
 /// Discover sessions by scanning JSONL files, then matching to live tmux panes.
 pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Session> {
-
     let claude_dir = match dirs::home_dir() {
         Some(h) => h.join(".claude").join("projects"),
         None => return vec![],
@@ -338,10 +341,8 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
 
             // Keep the recorded title for future incremental parses and render the pane override.
             let recorded_session_name = info.session_name;
-            let session_name = prefer_visible_title(
-                visible_title.clone(),
-                recorded_session_name.clone(),
-            );
+            let session_name =
+                prefer_visible_title(visible_title.clone(), recorded_session_name.clone());
             visible_titles.insert(session_id.clone(), visible_title);
 
             matched_session_ids.insert(session_id.clone());
@@ -542,19 +543,27 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
         }
 
         let meta = crate::codex::query_session_meta(session_id);
-        let cwd = meta.as_ref()
+        let cwd = meta
+            .as_ref()
             .and_then(|m| m.cwd.clone())
             .unwrap_or_else(|| live.pane_cwd.clone());
         let (project_name, relative_dir, branch) = git_project_info(&cwd);
 
         // Read per-turn token info from rollout JSONL (current context, not accumulated total)
-        let rollout_path = meta.as_ref()
+        let rollout_path = meta
+            .as_ref()
             .and_then(|m| m.rollout_path.as_ref())
             .map(PathBuf::from)
             .unwrap_or_default();
         let token_info = crate::codex::read_rollout_tokens(&rollout_path);
-        let input_tokens = token_info.as_ref().map(|t| t.last_input_tokens).unwrap_or(0);
-        let ctx_window = token_info.as_ref().map(|t| t.context_window).filter(|&w| w > 0);
+        let input_tokens = token_info
+            .as_ref()
+            .map(|t| t.last_input_tokens)
+            .unwrap_or(0);
+        let ctx_window = token_info
+            .as_ref()
+            .map(|t| t.context_window)
+            .filter(|&w| w > 0);
 
         let status = inspect_session_pane(
             &PathBuf::new(),
@@ -573,9 +582,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
         sessions.push(Session {
             session_id: session_id.clone(),
             project_name,
-            branch: meta.as_ref()
-                .and_then(|m| m.git_branch.clone())
-                .or(branch),
+            branch: meta.as_ref().and_then(|m| m.git_branch.clone()).or(branch),
             cwd,
             relative_dir,
             tmux_session: Some(live.tmux_session.clone()),
@@ -589,7 +596,8 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
             total_output_tokens: 0,
             status,
             pid: Some(live.pid),
-            last_activity: meta.as_ref()
+            last_activity: meta
+                .as_ref()
                 .map(|m| m.updated_at)
                 .and_then(crate::codex::epoch_to_iso),
             started_at: live.started_at,
@@ -1640,9 +1648,7 @@ fn pane_status_from_content_at(
         // Scan the full visible pane, not just the footer: a long todo
         // checklist or output block renders below the spinner line and can
         // push it many lines above the footer.
-        if session_limit.is_none()
-            && is_claude_working_line(trimmed, continuation_has_ellipsis)
-        {
+        if session_limit.is_none() && is_claude_working_line(trimmed, continuation_has_ellipsis) {
             is_working = true;
         }
 
@@ -1652,7 +1658,8 @@ fn pane_status_from_content_at(
         // to be followed by a dot ("❯ 1. Yes") so a number typed into the
         // input box ("❯ 1") isn't misread as a menu selection.
         if lines_checked < 10 {
-            if let Some(pos) = trimmed.find('\u{276F}') { // ❯
+            if let Some(pos) = trimmed.find('\u{276F}') {
+                // ❯
                 let after = trimmed[pos + '\u{276F}'.len_utf8()..].trim_start();
                 let rest = after.trim_start_matches(|c: char| c.is_ascii_digit());
                 if rest.len() < after.len() && rest.starts_with('.') {
@@ -2014,7 +2021,6 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use std::io::{BufReader, Cursor};
 
-
     #[test]
     fn omp_idle_with_zero_tokens_stays_idle() {
         assert_eq!(
@@ -2151,8 +2157,7 @@ mod tests {
         // A pane option for this exact deadline changes Limit into Queued.
         let reference = Utc.with_ymd_and_hms(2026, 7, 13, 20, 0, 0).unwrap();
         let reset_at = Utc.with_ymd_and_hms(2026, 7, 13, 22, 10, 0).unwrap();
-        let content =
-            "⎿  You've hit your session limit · resets 1:10am (Asia/Nicosia)";
+        let content = "⎿  You've hit your session limit · resets 1:10am (Asia/Nicosia)";
 
         assert_eq!(
             pane_status_from_content_at(content, reference, Some(reset_at.timestamp())).label(),
@@ -2604,8 +2609,11 @@ ordinary output
 
     // Write `content` to a unique temp jsonl, parse it fresh, return the name.
     fn parse_name(content: &str) -> Option<String> {
-        let path = std::env::temp_dir()
-            .join(format!("recon-title-test-{}-{}.jsonl", std::process::id(), content.len()));
+        let path = std::env::temp_dir().join(format!(
+            "recon-title-test-{}-{}.jsonl",
+            std::process::id(),
+            content.len()
+        ));
         std::fs::write(&path, content).unwrap();
         let info = parse_jsonl(&path, 0, 0, 0, None, None, None, None);
         let _ = std::fs::remove_file(&path);
@@ -2621,7 +2629,10 @@ ordinary output
             "{\"type\":\"user\",\"sessionId\":\"s\"}\n",
             "{\"type\":\"ai-title\",\"aiTitle\":\"Validate WDP bug report points\",\"sessionId\":\"s\"}\n"
         );
-        assert_eq!(parse_name(content), Some("Validate WDP bug report points".to_string()));
+        assert_eq!(
+            parse_name(content),
+            Some("Validate WDP bug report points".to_string())
+        );
     }
 
     #[test]

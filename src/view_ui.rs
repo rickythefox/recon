@@ -471,9 +471,20 @@ fn render_rooms(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn render_room(frame: &mut Frame, app: &App, room: &Room, area: Rect, slot_num: Option<usize>, selected_agent: Option<usize>) {
+fn render_room(
+    frame: &mut Frame,
+    app: &App,
+    room: &Room,
+    area: Rect,
+    slot_num: Option<usize>,
+    selected_agent: Option<usize>,
+) {
     let border_color = if room.has_attention {
-        if app.tick % 2 == 0 { Color::Yellow } else { Color::White }
+        if app.tick % 2 == 0 {
+            Color::Yellow
+        } else {
+            Color::White
+        }
     } else {
         Color::DarkGray
     };

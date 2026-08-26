@@ -86,20 +86,18 @@ impl NewSessionForm {
             KeyCode::Esc => {
                 self.result = Some(String::new());
             }
-            KeyCode::Enter => {
-                match self.active {
-                    Field::Name => {
-                        if self.name.trim().is_empty() {
-                            return;
-                        }
-                        self.active = Field::Cwd;
-                        self.cursor_pos = self.cwd.len();
+            KeyCode::Enter => match self.active {
+                Field::Name => {
+                    if self.name.trim().is_empty() {
+                        return;
                     }
-                    Field::Cwd | Field::Agent => {
-                        self.create_session();
-                    }
+                    self.active = Field::Cwd;
+                    self.cursor_pos = self.cwd.len();
                 }
-            }
+                Field::Cwd | Field::Agent => {
+                    self.create_session();
+                }
+            },
             // Toggle agent when space is pressed on the Agent field
             KeyCode::Char(' ') if matches!(self.active, Field::Agent) => {
                 self.agent = match self.agent {
@@ -108,38 +106,34 @@ impl NewSessionForm {
                     crate::session::AgentKind::Omp => crate::session::AgentKind::Claude,
                 };
             }
-            KeyCode::Tab | KeyCode::Down => {
-                match self.active {
-                    Field::Name => {
-                        self.active = Field::Cwd;
-                        self.cursor_pos = self.cwd.len();
-                    }
-                    Field::Cwd => {
-                        self.active = Field::Agent;
-                        self.cursor_pos = 0;
-                    }
-                    Field::Agent => {
-                        self.active = Field::Name;
-                        self.cursor_pos = self.name.len();
-                    }
+            KeyCode::Tab | KeyCode::Down => match self.active {
+                Field::Name => {
+                    self.active = Field::Cwd;
+                    self.cursor_pos = self.cwd.len();
                 }
-            }
-            KeyCode::BackTab | KeyCode::Up => {
-                match self.active {
-                    Field::Name => {
-                        self.active = Field::Agent;
-                        self.cursor_pos = 0;
-                    }
-                    Field::Cwd => {
-                        self.active = Field::Name;
-                        self.cursor_pos = self.name.len();
-                    }
-                    Field::Agent => {
-                        self.active = Field::Cwd;
-                        self.cursor_pos = self.cwd.len();
-                    }
+                Field::Cwd => {
+                    self.active = Field::Agent;
+                    self.cursor_pos = 0;
                 }
-            }
+                Field::Agent => {
+                    self.active = Field::Name;
+                    self.cursor_pos = self.name.len();
+                }
+            },
+            KeyCode::BackTab | KeyCode::Up => match self.active {
+                Field::Name => {
+                    self.active = Field::Agent;
+                    self.cursor_pos = 0;
+                }
+                Field::Cwd => {
+                    self.active = Field::Name;
+                    self.cursor_pos = self.name.len();
+                }
+                Field::Agent => {
+                    self.active = Field::Cwd;
+                    self.cursor_pos = self.cwd.len();
+                }
+            },
             // Text editing only applies to Name and Cwd fields
             _ if matches!(self.active, Field::Agent) => {}
             KeyCode::Backspace => {
