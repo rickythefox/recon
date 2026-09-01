@@ -230,16 +230,27 @@ pub fn omp_status_from_content(content: &str) -> SessionStatus {
     // braille spinner with elapsed time follows the border while a turn runs
     // ("╭── ⠸ 19s >"); idle shows "╭── π >". Quoted markers in scrollback
     // (another pane's footer, an "⟦esc⟧" hint, a waiting line) never count.
-    let live_footer_busy = tail
-        .iter()
-        .find(|l| l.starts_with("╭──"))
-        .is_some_and(|l| footer_has_spinner(l));
+    let live_footer = tail.iter().find(|l| l.starts_with("╭──"));
+    let live_footer_busy = live_footer.is_some_and(|l| footer_has_spinner(l));
 
     if live_footer_busy {
+        // A tool running in the foreground ("⠹ Read file ⟦esc⟧" or "⎋ Doing x")
+        // sits directly above the footer. That is real work, so it beats any
+        // background job count.
+        let footer_idx = tail.iter().position(|l| l.starts_with("╭──"));
+        let above_footer = footer_idx.and_then(|i| tail.get(i + 1));
+        if above_footer.is_some_and(|l| is_live_tool_line(l)) {
+            return SessionStatus::Working;
+        }
         // Waiting on background jobs: "ⓘ waiting on N job(s)" above the footer.
         // Trusted only while the footer spins; an idle "π" footer wins over a
         // quoted or captured waiting line lingering in scrollback.
         if let Some(count) = tail.iter().find_map(|l| waiting_job_count(l)) {
+            return SessionStatus::BackgroundTasks(count);
+        }
+        // The footer's "⚙ N" gear counts live background jobs even when the
+        // waiting line has scrolled away (e.g. "Polling in 60 min (bg_2)").
+        if let Some(count) = live_footer.and_then(|l| footer_job_count(l)) {
             return SessionStatus::BackgroundTasks(count);
         }
         return SessionStatus::Working;
@@ -253,6 +264,26 @@ fn footer_has_spinner(line: &str) -> bool {
     line.strip_prefix("╭──")
         .and_then(|rest| rest.trim_start().chars().next())
         .is_some_and(|c| matches!(c, '\u{2800}'..='\u{28FF}'))
+}
+
+/// True for an in-flight tool line: braille spinner + "⟦esc⟧" hint, or "⎋".
+fn is_live_tool_line(line: &str) -> bool {
+    let spinner = line
+        .chars()
+        .next()
+        .is_some_and(|c| matches!(c, '\u{2800}'..='\u{28FF}'));
+    (spinner && line.ends_with("⟦esc⟧")) || line.starts_with('\u{238B}') // ⎋
+}
+
+/// Parse the footer gear "⚙ N" → N background jobs; None when absent or zero.
+fn footer_job_count(line: &str) -> Option<u32> {
+    let pos = line.find('\u{2699}')?; // ⚙
+    let count: u32 = line[pos + '\u{2699}'.len_utf8()..]
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
+    (count > 0).then_some(count)
 }
 
 /// Parse "ⓘ waiting on 2 jobs" → 2, tolerating the singular/plural wording.
@@ -421,6 +452,41 @@ mod tests {
 ╰─                                                                                              ─╯
 ";
         assert_eq!(omp_status_from_content(content), SessionStatus::Working);
+    }
+
+    #[test]
+    fn spinner_footer_with_gear_count_is_background_tasks() {
+        // No "ⓘ waiting on" line on screen, but the live footer gear shows
+        // one background job while the turn keeps spinning.
+        let content = "\
+ Polling in 60 min (bg_2). Summary of where we are:
+  └─ ☑ Deploy V094 to DEV and TEST
+╭── ⠇ 3m  > ◒ Fable 5 🙈 > S635.40 + 👁 S579.27 ▶────20%────┃────1M─◀ ⚙ 1 < wor-158 ──╮
+╰─                                                                                      ─╯
+";
+        assert_eq!(
+            omp_status_from_content(content),
+            SessionStatus::BackgroundTasks(1)
+        );
+    }
+
+    #[test]
+    fn live_tool_line_beats_gear_count() {
+        // Foreground tool running while a background job exists → Working.
+        let content = "\
+ Polling in 60 min (bg_2).
+ ⠹ Read migration file ⟦esc⟧
+╭── ⠇ 3m  > ◒ Fable 5 🙈 > S635.40 ▶────20%────┃────1M─◀ ⚙ 1 < wor-158 ──╮
+╰─                                                                          ─╯
+";
+        assert_eq!(omp_status_from_content(content), SessionStatus::Working);
+    }
+
+    #[test]
+    fn footer_job_count_parses_gear() {
+        assert_eq!(footer_job_count("▶─7%─◀ ⚙ 2 < title ──╮"), Some(2));
+        assert_eq!(footer_job_count("▶─7%─◀ ⚙ 0 < title ──╮"), None);
+        assert_eq!(footer_job_count("▶─7%─◀ < title ──╮"), None);
     }
 
     #[test]
