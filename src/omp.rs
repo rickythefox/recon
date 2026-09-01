@@ -226,12 +226,42 @@ pub fn omp_status_from_content(content: &str) -> SessionStatus {
         return SessionStatus::Input;
     }
 
-    // Working: interrupt hint on the current tool/spinner line near the footer.
-    if tail.iter().any(|l| l.contains("⟦esc⟧")) {
+    // The live footer (bottom-most "╭──" line) is the sole busy authority: a
+    // braille spinner with elapsed time follows the border while a turn runs
+    // ("╭── ⠸ 19s >"); idle shows "╭── π >". Quoted markers in scrollback
+    // (another pane's footer, an "⟦esc⟧" hint, a waiting line) never count.
+    let live_footer_busy = tail
+        .iter()
+        .find(|l| l.starts_with("╭──"))
+        .is_some_and(|l| footer_has_spinner(l));
+
+    if live_footer_busy {
+        // Waiting on background jobs: "ⓘ waiting on N job(s)" above the footer.
+        // Trusted only while the footer spins; an idle "π" footer wins over a
+        // quoted or captured waiting line lingering in scrollback.
+        if let Some(count) = tail.iter().find_map(|l| waiting_job_count(l)) {
+            return SessionStatus::BackgroundTasks(count);
+        }
         return SessionStatus::Working;
     }
 
     SessionStatus::Idle
+}
+
+/// True when a footer border line carries a braille spinner ("╭── ⠸ 19s >").
+fn footer_has_spinner(line: &str) -> bool {
+    line.strip_prefix("╭──")
+        .and_then(|rest| rest.trim_start().chars().next())
+        .is_some_and(|c| matches!(c, '\u{2800}'..='\u{28FF}'))
+}
+
+/// Parse "ⓘ waiting on 2 jobs" → 2, tolerating the singular/plural wording.
+/// Anchored on the ⓘ marker so quoted text ("echo waiting on 1 job") is ignored.
+fn waiting_job_count(line: &str) -> Option<u32> {
+    let rest = line.strip_prefix("ⓘ waiting on ")?;
+    let mut words = rest.split_whitespace();
+    let count = words.next()?.parse().ok()?;
+    matches!(words.next()?, "job" | "jobs").then_some(count)
 }
 
 /// Footer markers for the OMP `ask` widget.
@@ -384,14 +414,91 @@ mod tests {
     }
 
     #[test]
-    fn interrupt_hint_near_footer_is_working() {
+    fn spinner_footer_without_esc_hint_is_working() {
+        let content = "\
+  ⎋ Capturing all omp pane footers
+╭── ⠸ 19s  > ◒ Fable 5 👁 > ⑂ main *1 > S2.56 + 👁 S0.27 ▶─7%───┃──1M─◀ ⚙ 1 < Fix omp status ──╮
+╰─                                                                                              ─╯
+";
+        assert_eq!(omp_status_from_content(content), SessionStatus::Working);
+    }
+
+    #[test]
+    fn waiting_on_background_job_is_background_tasks() {
+        let content = "\
+ⓘ waiting on 1 job
+└─ ⣯ bg_9 ⟦bash⟧ sleep 900
+
+╭── ⠧ 7m  > ◒ Opus 4.6 👁 > S632.28 + 👁 S579.03 ▶────────14%──────────────────────────╮
+╰─                                                                                      ─╯
+";
+        assert_eq!(
+            omp_status_from_content(content),
+            SessionStatus::BackgroundTasks(1)
+        );
+    }
+
+    #[test]
+    fn quoted_spinner_footer_above_idle_live_footer_stays_idle() {
+        // Pane output quoting another session's working footer must not
+        // override the idle "╭── π" live footer below it.
+        let content = "\
+=== 0:1.0 ===
+╭── ⠹ 9m  > ◒ Opus 4.6 👁 > S632.28 ▶────14%───┃──1M─◀ ⚙ 1 < wor-158 ──╮
+╰─                                                                      ─╯
+
+╭── π  > ⬢ Grok 4.6 👁 · ◒ high > 📁 ~/src/worko > ◫ 20.8%/500K ──╮
+╰─                                                                  ─╯
+";
+        assert_eq!(omp_status_from_content(content), SessionStatus::Idle);
+    }
+
+    #[test]
+    fn quoted_waiting_text_without_marker_stays_idle() {
+        // Quoted or echoed "waiting on 1 job" lacks the ⓘ marker.
+        let content = "\
+echo waiting on 1 job
+
+╭── π  > ⬢ Grok 4.6 👁 · ◒ high > 📁 ~/src/worko > ◫ 20.8%/500K ──╮
+╰─                                                                  ─╯
+";
+        assert_eq!(omp_status_from_content(content), SessionStatus::Idle);
+    }
+
+    #[test]
+    fn captured_waiting_marker_above_idle_footer_stays_idle() {
+        // An exact "ⓘ waiting on N job" line copied into scrollback (e.g. by
+        // capture-pane output) must not beat the idle "╭── π" live footer.
+        let content = "\
+ⓘ waiting on 1 job
+└─ ⣯ bg_9 ⟦bash⟧ sleep 900
+
+╭── π  > ⬢ Grok 4.6 👁 · ◒ high > 📁 ~/src/worko > ◫ 20.8%/500K ──╮
+╰─                                                                  ─╯
+";
+        assert_eq!(omp_status_from_content(content), SessionStatus::Idle);
+    }
+
+    #[test]
+    fn waiting_job_count_parses_singular_and_plural() {
+        assert_eq!(waiting_job_count("ⓘ waiting on 1 job"), Some(1));
+        assert_eq!(waiting_job_count("ⓘ waiting on 3 jobs"), Some(3));
+        assert_eq!(waiting_job_count("ⓘ waiting on 2 agents"), None);
+        assert_eq!(waiting_job_count("waiting on 1 job"), None);
+    }
+
+    #[test]
+    fn quoted_esc_hint_above_idle_footer_stays_idle() {
+        // "⟦esc⟧" in scrollback (quoted source, test text, or a captured
+        // pane) must not beat the idle "╭── π" live footer; the footer
+        // spinner is the sole busy authority.
         let content = "\
  ⠹ Capture recon OMP pane footer ⟦esc⟧
 
 ╭── π  > ⬢ Grok 4.6 👁 · ◒ high > 📁 ~/src/oss/recon > ◫ 26.3%/500K ──╮
 ╰─                                                                                                                              ─╯
 ";
-        assert_eq!(omp_status_from_content(content), SessionStatus::Working);
+        assert_eq!(omp_status_from_content(content), SessionStatus::Idle);
     }
 
     #[test]
