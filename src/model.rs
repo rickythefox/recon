@@ -9,10 +9,11 @@
 //!
 //! (the `.md` variant is plain markdown and easy to diff). The page lists every
 //! current and legacy model with its exact API ID and context window. Last
-//! synced 2026-07-17:
+//! synced 2026-07-17; Fable 5.1 added 2026-09-05:
 //!
 //! | Model        | API ID                       | Context window |
 //! |--------------|------------------------------|----------------|
+//! | Fable 5.1    | claude-fable-5-1             | 1M             |
 //! | Fable 5      | claude-fable-5               | 1M             |
 //! | Opus 4.8     | claude-opus-4-8              | 1M             |
 //! | Opus 4.7     | claude-opus-4-7              | 1M             |
@@ -31,6 +32,7 @@
 pub fn display_name(model_id: &str) -> &str {
     let model_id = canonical_model_id(model_id);
     match model_id {
+        "claude-fable-5-1" => "Fable 5.1",
         "claude-fable-5" => "Fable 5",
         "claude-opus-4-8" => "Opus 4.8",
         "claude-opus-4-7" => "Opus 4.7",
@@ -43,9 +45,10 @@ pub fn display_name(model_id: &str) -> &str {
         "claude-haiku-4-5-20251001" => "Haiku 4.5",
         "claude-opus-4-20250514" => "Opus 4",
         "claude-sonnet-4-20250514" => "Sonnet 4",
-        "gpt-5.6-sol" => "5.6 Sol",
-        "gpt-5.6-terra" => "5.6 Terra",
-        "gpt-5.6-luna" => "5.6 Luna",
+        "gpt-6-astra" => "Astra",
+        "gpt-5.6-sol" => "Sol",
+        "gpt-5.6-terra" => "Terra",
+        "gpt-5.6-luna" => "Luna",
         "gpt-5.5" => "GPT-5.5",
         "gpt-5.4" => "GPT-5.4",
         "o4-mini" => "o4-mini",
@@ -64,6 +67,7 @@ fn canonical_model_id(model_id: &str) -> &str {
 /// Context window size for a given model ID.
 pub fn context_window(model_id: &str) -> u64 {
     match model_id {
+        "claude-fable-5-1" => 1_000_000,
         "claude-fable-5" => 1_000_000,
         "claude-opus-4-8" => 1_000_000,
         "claude-opus-4-7" => 1_000_000,
@@ -97,6 +101,7 @@ fn is_opus_1m(model_id: &str) -> bool {
 /// Returns None if the display name is not recognized.
 pub fn id_from_display_name(display: &str) -> Option<&'static str> {
     match display {
+        "Fable 5.1" | "Fable 5.1 (1M context)" => Some("claude-fable-5-1"),
         "Fable 5" | "Fable 5 (1M context)" => Some("claude-fable-5"),
         "Opus 4.8" | "Opus 4.8 (1M context)" => Some("claude-opus-4-8"),
         "Opus 4.7" | "Opus 4.7 (1M context)" => Some("claude-opus-4-7"),
@@ -107,9 +112,10 @@ pub fn id_from_display_name(display: &str) -> Option<&'static str> {
         "Haiku 4.5" => Some("claude-haiku-4-5-20251001"),
         "Opus 4" => Some("claude-opus-4-20250514"),
         "Sonnet 4" => Some("claude-sonnet-4-20250514"),
-        "5.6 Sol" => Some("gpt-5.6-sol"),
-        "5.6 Terra" => Some("gpt-5.6-terra"),
-        "5.6 Luna" => Some("gpt-5.6-luna"),
+        "Astra" => Some("gpt-6-astra"),
+        "Sol" | "5.6 Sol" => Some("gpt-5.6-sol"),
+        "Terra" | "5.6 Terra" => Some("gpt-5.6-terra"),
+        "Luna" | "5.6 Luna" => Some("gpt-5.6-luna"),
         "GPT-5.5" => Some("gpt-5.5"),
         "GPT-5.4" => Some("gpt-5.4"),
         "o4-mini" => Some("o4-mini"),
