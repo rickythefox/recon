@@ -15,7 +15,7 @@ use crate::session::{Session, SessionStatus};
 const ROOMS_PER_PAGE: usize = 4;
 const SPRITE_W: usize = 10; // pixel columns
 const SPRITE_H: usize = 10; // pixel rows
-const SPRITE_RENDER_H: u16 = (SPRITE_H as u16 + 1) / 2; // terminal lines for sprite (5)
+const SPRITE_RENDER_H: u16 = (SPRITE_H as u16).div_ceil(2); // terminal lines for sprite (5)
 const CHAR_WIDTH: u16 = (SPRITE_W as u16) + 4; // sprite + padding
 const CHAR_LABEL_LINES: u16 = 4; // name + branch + status + context bar
 const CHAR_HEIGHT: u16 = SPRITE_RENDER_H + CHAR_LABEL_LINES;
@@ -208,13 +208,11 @@ fn sprite_data(status: &SessionStatus, frame: usize) -> (&'static Sprite, Palett
 fn render_sprite_lines(sprite: &Sprite, palette: Palette) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let rows = SPRITE_H;
-    let cols = SPRITE_W;
 
     for y in (0..rows).step_by(2) {
         let mut spans: Vec<Span<'static>> = Vec::new();
 
-        for x in 0..cols {
-            let top = sprite[y][x];
+        for (x, &top) in sprite[y].iter().enumerate() {
             let bot = if y + 1 < rows { sprite[y + 1][x] } else { 0 };
 
             if top == 0 && bot == 0 {
@@ -363,7 +361,7 @@ fn context_bar(ratio: f64) -> (String, Color) {
 pub fn resolve_zoom(app: &mut App) {
     let filtered = app.filtered_indices();
     let rooms = group_into_rooms(&app.sessions, &filtered);
-    let total_pages = (rooms.len() + ROOMS_PER_PAGE - 1) / ROOMS_PER_PAGE;
+    let total_pages = rooms.len().div_ceil(ROOMS_PER_PAGE);
     if total_pages > 0 {
         app.view_page = app.view_page.min(total_pages - 1);
     } else {
@@ -447,7 +445,7 @@ fn render_rooms(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    let total_pages = (rooms.len() + ROOMS_PER_PAGE - 1) / ROOMS_PER_PAGE;
+    let total_pages = rooms.len().div_ceil(ROOMS_PER_PAGE);
     let page = app.view_page.min(total_pages.saturating_sub(1));
     let page_start = page * ROOMS_PER_PAGE;
     let page_rooms: Vec<&Room> = rooms.iter().skip(page_start).take(ROOMS_PER_PAGE).collect();
@@ -480,7 +478,7 @@ fn render_room(
     selected_agent: Option<usize>,
 ) {
     let border_color = if room.has_attention {
-        if app.tick % 2 == 0 {
+        if app.tick.is_multiple_of(2) {
             Color::Yellow
         } else {
             Color::White
@@ -574,7 +572,7 @@ fn render_character(
     let ratio = session.token_ratio();
 
     let color = if session.status == SessionStatus::Input {
-        if tick % 2 == 0 {
+        if tick.is_multiple_of(2) {
             Color::Yellow
         } else {
             Color::White
@@ -658,7 +656,7 @@ fn render_empty(frame: &mut Frame, area: Rect, _tick: u64) {
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let rooms = group_into_rooms(&app.sessions, &app.filtered_indices());
-    let total_pages = (rooms.len() + ROOMS_PER_PAGE - 1) / ROOMS_PER_PAGE;
+    let total_pages = rooms.len().div_ceil(ROOMS_PER_PAGE);
     let page = app.view_page.min(total_pages.saturating_sub(1));
 
     let mut spans = vec![];

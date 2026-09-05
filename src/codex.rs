@@ -114,7 +114,7 @@ fn find_codex_session_recursive(pid: i32, depth: u8) -> Option<(i32, String)> {
         .output()
         .ok()?;
     for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if let Some(child_pid) = line.trim().parse::<i32>().ok() {
+        if let Ok(child_pid) = line.trim().parse::<i32>() {
             if let Some(result) = find_codex_session_recursive(child_pid, depth - 1) {
                 return Some(result);
             }

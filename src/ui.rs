@@ -341,7 +341,7 @@ fn status_content(dot: &str, color: Color, label: &str) -> Vec<StyledChar> {
 }
 
 /// User-renamed tmux window, if automatic-rename is off and the name is non-empty.
-fn user_set_tmux_window<'a>(name: Option<&'a str>, automatic_rename: bool) -> Option<&'a str> {
+fn user_set_tmux_window(name: Option<&str>, automatic_rename: bool) -> Option<&str> {
     let name = name.map(str::trim).filter(|s| !s.is_empty())?;
     if automatic_rename {
         None

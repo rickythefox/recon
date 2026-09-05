@@ -348,9 +348,7 @@ pub fn run_resume_picker() -> io::Result<Option<(String, String, AgentKind)>> {
                         }
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
-                        if selected > 0 {
-                            selected -= 1;
-                        }
+                        selected = selected.saturating_sub(1);
                     }
                     KeyCode::Enter => {
                         if entries.is_empty() {

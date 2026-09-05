@@ -271,16 +271,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
                     let new_size = path.metadata().ok().map(|m| m.len()).unwrap_or(0);
                     if new_size > existing_size {
                         let prev = prev_sessions.get(&session_id);
-                        let info = parse_jsonl(
-                            &path,
-                            prev.map(|s| s.last_file_size).unwrap_or(0),
-                            prev.map(|s| s.total_input_tokens).unwrap_or(0),
-                            prev.map(|s| s.total_output_tokens).unwrap_or(0),
-                            prev.and_then(|s| s.model.clone()),
-                            prev.and_then(|s| s.effort.clone()),
-                            prev.and_then(|s| s.last_activity.clone()),
-                            prev.and_then(|s| s.recorded_session_name.clone()),
-                        );
+                        let info = parse_jsonl(&path, prev);
                         let cwd = info
                             .cwd
                             .or_else(|| prev.map(|s| s.cwd.clone()))
@@ -310,16 +301,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
 
             // Incremental JSONL parsing
             let prev = prev_sessions.get(&session_id);
-            let info = parse_jsonl(
-                &path,
-                prev.map(|s| s.last_file_size).unwrap_or(0),
-                prev.map(|s| s.total_input_tokens).unwrap_or(0),
-                prev.map(|s| s.total_output_tokens).unwrap_or(0),
-                prev.and_then(|s| s.model.clone()),
-                prev.and_then(|s| s.effort.clone()),
-                prev.and_then(|s| s.last_activity.clone()),
-                prev.and_then(|s| s.recorded_session_name.clone()),
-            );
+            let info = parse_jsonl(&path, prev);
 
             let cwd = info
                 .cwd
@@ -430,16 +412,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
 
         if let Some(path) = resolved_path {
             let prev = prev_sessions.get(session_id_key.as_str());
-            let info = parse_jsonl(
-                &path,
-                prev.map(|s| s.last_file_size).unwrap_or(0),
-                prev.map(|s| s.total_input_tokens).unwrap_or(0),
-                prev.map(|s| s.total_output_tokens).unwrap_or(0),
-                prev.and_then(|s| s.model.clone()),
-                prev.and_then(|s| s.effort.clone()),
-                prev.and_then(|s| s.last_activity.clone()),
-                prev.and_then(|s| s.recorded_session_name.clone()),
-            );
+            let info = parse_jsonl(&path, prev);
 
             let cwd = info.cwd.clone().unwrap_or_else(|| live.pane_cwd.clone());
             let (project_name, relative_dir, branch) = git_project_info(&cwd);
@@ -1041,16 +1014,16 @@ struct UsageEntry {
 }
 
 /// Parse JSONL file, incrementally if possible.
-fn parse_jsonl(
-    path: &Path,
-    prev_file_size: u64,
-    prev_input: u64,
-    prev_output: u64,
-    prev_model: Option<String>,
-    prev_effort: Option<String>,
-    prev_activity: Option<String>,
-    prev_session_name: Option<String>,
-) -> ParsedInfo {
+fn parse_jsonl(path: &Path, previous: Option<&Session>) -> ParsedInfo {
+    // Restore the previous refresh state at the parser boundary.
+    let prev_file_size = previous.map(|s| s.last_file_size).unwrap_or(0);
+    let prev_input = previous.map(|s| s.total_input_tokens).unwrap_or(0);
+    let prev_output = previous.map(|s| s.total_output_tokens).unwrap_or(0);
+    let prev_model = previous.and_then(|s| s.model.clone());
+    let prev_effort = previous.and_then(|s| s.effort.clone());
+    let prev_activity = previous.and_then(|s| s.last_activity.clone());
+    let prev_session_name = previous.and_then(|s| s.recorded_session_name.clone());
+
     let file = match fs::File::open(path) {
         Ok(f) => f,
         Err(_) => {
@@ -1177,7 +1150,7 @@ fn parse_jsonl(
                         .filter(|s| !s.is_empty());
                     (&remainder[..wp], eff)
                 } else {
-                    (&remainder[..], None)
+                    (remainder, None)
                 };
                 if let Some(e) = new_effort {
                     effort = Some(e);
@@ -1288,7 +1261,7 @@ fn find_jsonl_by_open_fd(pid: i32) -> Option<PathBuf> {
         }
         let path = PathBuf::from(name);
         let size = path.metadata().ok().map(|m| m.len()).unwrap_or(0);
-        if best.as_ref().map_or(true, |(_, s)| size > *s) {
+        if best.as_ref().is_none_or(|(_, s)| size > *s) {
             best = Some((path, size));
         }
     }
@@ -1333,8 +1306,7 @@ fn parse_resume_id_from_ps(pid: i32) -> Option<String> {
         .ok()?;
 
     let args = String::from_utf8_lossy(&output.stdout);
-    args.trim()
-        .split_whitespace()
+    args.split_whitespace()
         .skip_while(|&a| a != "--resume")
         .nth(1)
         .map(|s| s.to_string())
@@ -1386,7 +1358,7 @@ fn find_jsonl_by_session_id(session_id: &str) -> Option<PathBuf> {
         let candidate = entry.path().join(format!("{session_id}.jsonl"));
         if candidate.exists() {
             let size = candidate.metadata().ok().map(|m| m.len()).unwrap_or(0);
-            if best.as_ref().map_or(true, |(_, s)| size > *s) {
+            if best.as_ref().is_none_or(|(_, s)| size > *s) {
                 best = Some((candidate, size));
             }
         }
@@ -1414,7 +1386,7 @@ pub fn find_live_tmux_for_session(session_id: &str) -> Option<String> {
     }
 
     // Resumed session: RECON_RESUMED_FROM env var matches.
-    for (_, info) in &live_map {
+    for info in live_map.values() {
         if let Some(orig_id) = read_tmux_env(&info.tmux_session, "RECON_RESUMED_FROM") {
             if orig_id == session_id {
                 return Some(info.pane_target.clone());
@@ -1887,7 +1859,7 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
     // Evict stale Codex cache entries for PIDs no longer in tmux
     let all_pane_pids: Vec<i32> = stdout
         .lines()
-        .filter_map(|l| l.splitn(2, "|||").next()?.parse::<i32>().ok())
+        .filter_map(|l| l.split("|||").next()?.parse::<i32>().ok())
         .collect();
     crate::codex::evict_stale_codex_cache(&all_pane_pids);
 
@@ -2626,7 +2598,7 @@ ordinary output
             content.len()
         ));
         std::fs::write(&path, content).unwrap();
-        let info = parse_jsonl(&path, 0, 0, 0, None, None, None, None);
+        let info = parse_jsonl(&path, None);
         let _ = std::fs::remove_file(&path);
         info.session_name
     }

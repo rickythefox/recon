@@ -614,7 +614,7 @@ impl App {
             .filter(|(_, s)| {
                 filters
                     .iter()
-                    .all(|(k, v)| s.tags.get(*k).map_or(false, |tv| tv == v))
+                    .all(|(k, v)| s.tags.get(*k).is_some_and(|tv| tv == v))
             })
             .map(|(i, s)| {
                 serde_json::json!({
