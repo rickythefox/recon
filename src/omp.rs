@@ -10,13 +10,14 @@ pub struct OmpTerminalSession {
     pub session_id: String,
 }
 
-/// Title, model, and cwd extracted from an OMP jsonl header.
-#[derive(Debug, Clone, PartialEq)]
+/// Current OMP metadata and the byte offset through the last complete record.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct OmpSessionMeta {
     pub session_id: String,
     pub cwd: Option<String>,
     pub title: Option<String>,
     pub model: Option<String>,
+    pub last_file_size: u64,
 }
 
 /// Live context usage parsed from the OMP status footer.
@@ -60,71 +61,49 @@ pub fn session_id_from_jsonl_path(path: &str) -> Option<String> {
     }
 }
 
-/// Scan jsonl text for session id/cwd, title, and the last model_change.
-pub fn parse_jsonl_meta(content: &str) -> Option<OmpSessionMeta> {
-    let mut session_id = None;
-    let mut cwd = None;
-    let mut title = None;
-    let mut model = None;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-            continue;
-        };
-        let Some(kind) = v.get("type").and_then(|t| t.as_str()) else {
-            continue;
-        };
-        match kind {
-            "title" => {
-                if let Some(t) = v.get("title").and_then(|t| t.as_str()) {
-                    if !t.is_empty() {
-                        title = Some(t.to_string());
-                    }
-                }
-            }
-            "title_change" => {
-                if title.is_none() {
-                    if let Some(t) = v.get("title").and_then(|t| t.as_str()) {
-                        if !t.is_empty() {
-                            title = Some(t.to_string());
-                        }
-                    }
-                }
-            }
-            "session" => {
-                if let Some(id) = v.get("id").and_then(|t| t.as_str()) {
-                    session_id = Some(id.to_string());
-                }
-                if let Some(dir) = v.get("cwd").and_then(|t| t.as_str()) {
-                    cwd = Some(dir.to_string());
-                }
-                if title.is_none() {
-                    if let Some(t) = v.get("title").and_then(|t| t.as_str()) {
-                        if !t.is_empty() {
-                            title = Some(t.to_string());
-                        }
-                    }
-                }
-            }
-            "model_change" => {
-                if let Some(m) = v.get("model").and_then(|t| t.as_str()) {
-                    model = Some(m.to_string());
-                }
-            }
-            _ => {}
-        }
+/// Apply metadata records without allocating the ignored message/tool payloads.
+fn apply_jsonl_meta(meta: &mut OmpSessionMeta, line: &[u8]) {
+    #[derive(serde::Deserialize)]
+    struct Record<'a> {
+        #[serde(rename = "type")]
+        kind: &'a str,
+        id: Option<String>,
+        cwd: Option<String>,
+        title: Option<String>,
+        model: Option<String>,
     }
 
-    Some(OmpSessionMeta {
-        session_id: session_id?,
-        cwd,
-        title,
-        model,
-    })
+    // Only top-level metadata participates; quoted records in messages do not.
+    let Ok(record) = serde_json::from_slice::<Record<'_>>(line) else {
+        return;
+    };
+    match record.kind {
+        "title" => {
+            if let Some(title) = record.title.filter(|t| !t.is_empty()) {
+                meta.title = Some(title);
+            }
+        }
+        "title_change" if meta.title.is_none() => {
+            meta.title = record.title.filter(|t| !t.is_empty());
+        }
+        "session" => {
+            if let Some(id) = record.id {
+                meta.session_id = id;
+            }
+            if record.cwd.is_some() {
+                meta.cwd = record.cwd;
+            }
+            if meta.title.is_none() {
+                meta.title = record.title.filter(|t| !t.is_empty());
+            }
+        }
+        "model_change" => {
+            if record.model.is_some() {
+                meta.model = record.model;
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Parse `◫ 23.0%/500K` from the OMP pane footer (last 15 non-empty lines).
@@ -316,23 +295,31 @@ pub fn find_omp_session(pane_tty: &str) -> Option<OmpTerminalSession> {
     parse_terminal_session(&content)
 }
 
-/// Read title/model/cwd from the jsonl header. Full-file scans would stall
-/// the 2s refresh on multi-megabyte sessions.
-pub fn read_jsonl_meta(path: &Path) -> Option<OmpSessionMeta> {
-    use std::io::{BufRead, BufReader};
+/// Scan once, then read only appended records using the previous refresh state.
+pub fn read_jsonl_meta(path: &Path, previous: Option<OmpSessionMeta>) -> Option<OmpSessionMeta> {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
+    // Truncation invalidates both the offset and the accumulated metadata.
     let file = std::fs::File::open(path).ok()?;
+    let file_size = file.metadata().ok()?.len();
+    let mut meta = previous
+        .filter(|m| m.last_file_size > 0 && m.last_file_size <= file_size)
+        .unwrap_or_default();
     let mut reader = BufReader::new(file);
-    let mut header = String::new();
-    let mut line = String::new();
-    for _ in 0..40 {
+    reader.seek(SeekFrom::Start(meta.last_file_size)).ok()?;
+
+    // Leave an unfinished final record for the next refresh, even across UTF-8 bytes.
+    let mut line = Vec::new();
+    loop {
         line.clear();
-        if reader.read_line(&mut line).ok()? == 0 {
+        let bytes = reader.read_until(b'\n', &mut line).ok()?;
+        if bytes == 0 || line.last() != Some(&b'\n') {
             break;
         }
-        header.push_str(&line);
+        apply_jsonl_meta(&mut meta, &line);
+        meta.last_file_size += bytes as u64;
     }
-    parse_jsonl_meta(&header)
+    (!meta.session_id.is_empty()).then_some(meta)
 }
 
 /// Capture a tmux pane and classify OMP Idle/Working/Input.
@@ -390,11 +377,105 @@ mod tests {
 {"type":"model_change","model":"anthropic/claude-opus-4-8"}
 {"type":"model_change","model":"xai-oauth/grok-4.6"}
 "#;
-        let meta = parse_jsonl_meta(content).unwrap();
+        let mut meta = OmpSessionMeta::default();
+        for line in content.lines() {
+            apply_jsonl_meta(&mut meta, line.as_bytes());
+        }
         assert_eq!(meta.session_id, "01a02415-a891-7000-b483-5c69057c247e");
         assert_eq!(meta.cwd.as_deref(), Some("/Users/richard/src/oss/recon"));
         assert_eq!(meta.title.as_deref(), Some("Add omp agent support"));
         assert_eq!(meta.model.as_deref(), Some("xai-oauth/grok-4.6"));
+    }
+
+    #[test]
+    fn reads_model_switch_beyond_header_and_tail_window() {
+        // The current model can sit deep in a long-lived transcript.
+        let path =
+            std::env::temp_dir().join(format!("recon-omp-late-model-{}.jsonl", std::process::id()));
+        let mut content = String::from(
+            "{\"type\":\"session\",\"id\":\"late-model\"}\n\
+             {\"type\":\"model_change\",\"model\":\"openai-codex/gpt-5.6-luna\",\"role\":\"smol\"}\n",
+        );
+        content.push_str(&"{\"type\":\"message\"}\n".repeat(50));
+        content.push_str(
+            "{\"type\":\"model_change\",\"model\":\"openai-codex/gpt-6-astra\",\"role\":\"temporary\"}\n",
+        );
+        content.push_str(&"{\"type\":\"message\"}\n".repeat(4000));
+        std::fs::write(&path, content).unwrap();
+        let meta = read_jsonl_meta(&path, None).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(meta.model.as_deref(), Some("openai-codex/gpt-6-astra"));
+    }
+
+    #[test]
+    fn refreshes_appended_model_only_after_record_is_complete() {
+        use std::io::Write;
+
+        // Preserve header metadata across refreshes and partial append writes.
+        let path = std::env::temp_dir().join(format!(
+            "recon-omp-append-model-{}.jsonl",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "{\"type\":\"session\",\"id\":\"append-model\",\"cwd\":\"/work\",\"title\":\"Keep title\"}\n\
+             {\"type\":\"model_change\",\"model\":\"openai-codex/gpt-5.6-luna\"}\n",
+        )
+        .unwrap();
+        let initial = read_jsonl_meta(&path, None).unwrap();
+        let mut writer = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writer
+            .write_all(b"{\"type\":\"model_change\",\"model\":\"openai-codex/gpt-6-as")
+            .unwrap();
+        let partial = read_jsonl_meta(&path, Some(initial)).unwrap();
+        assert_eq!(partial.model.as_deref(), Some("openai-codex/gpt-5.6-luna"));
+        writer.write_all(b"tra\"}\n").unwrap();
+        let updated = read_jsonl_meta(&path, Some(partial)).unwrap();
+        assert_eq!(updated.model.as_deref(), Some("openai-codex/gpt-6-astra"));
+        assert_eq!(updated.session_id, "append-model");
+        assert_eq!(updated.cwd.as_deref(), Some("/work"));
+        assert_eq!(updated.title.as_deref(), Some("Keep title"));
+
+        // An older model mentioned in message payloads must not override the switch.
+        writer
+            .write_all(
+                b"{\"type\":\"message\",\"message\":{\"type\":\"model_change\",\"model\":\"openai-codex/gpt-5.6-luna\"}}\n",
+            )
+            .unwrap();
+        let unchanged = read_jsonl_meta(&path, Some(updated)).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(unchanged.model.as_deref(), Some("openai-codex/gpt-6-astra"));
+    }
+
+    #[test]
+    fn discards_cached_metadata_after_truncation() {
+        // Rewritten transcripts must not inherit a stale offset, model, or title.
+        let path = std::env::temp_dir().join(format!(
+            "recon-omp-truncated-model-{}.jsonl",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "{\"type\":\"session\",\"id\":\"old-session\",\"cwd\":\"/old\",\"title\":\"Old title\"}\n\
+             {\"type\":\"model_change\",\"model\":\"openai-codex/gpt-5.6-luna\"}\n",
+        )
+        .unwrap();
+        let initial = read_jsonl_meta(&path, None).unwrap();
+        std::fs::write(
+            &path,
+            "{\"type\":\"session\",\"id\":\"new-session\"}\n\
+             {\"type\":\"model_change\",\"model\":\"openai-codex/gpt-6-astra\"}\n",
+        )
+        .unwrap();
+        let rewritten = read_jsonl_meta(&path, Some(initial)).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(rewritten.session_id, "new-session");
+        assert_eq!(rewritten.model.as_deref(), Some("openai-codex/gpt-6-astra"));
+        assert_eq!(rewritten.cwd, None);
+        assert_eq!(rewritten.title, None);
     }
 
     #[test]

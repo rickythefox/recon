@@ -92,6 +92,8 @@ recon is built around **tmux**. Each Claude Code instance runs in its own tmux s
 
 **Session matching** uses `~/.claude/sessions/{PID}.json` files that Claude Code writes, linking each process to its session ID. No `ps` parsing or CWD-based heuristics.
 
+**OMP sessions** are matched through `~/.omp/agent/terminal-sessions/{tty}`. Recon scans their transcripts once, then reads appended metadata on each refresh so model switches remain current even in long-running sessions. Incomplete records are retried on the next refresh; truncation resets the scan.
+
 ## Install
 
 ```bash

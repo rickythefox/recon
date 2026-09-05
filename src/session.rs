@@ -621,7 +621,18 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
         }
 
         let jsonl_path = live.jsonl_path.clone().unwrap_or_default();
-        let meta = crate::omp::read_jsonl_meta(&jsonl_path);
+        // Reuse only metadata belonging to this exact OMP transcript.
+        let previous = prev_sessions
+            .get(session_id)
+            .filter(|s| s.agent == AgentKind::Omp && s.jsonl_path == jsonl_path)
+            .map(|s| crate::omp::OmpSessionMeta {
+                session_id: s.session_id.clone(),
+                cwd: Some(s.cwd.clone()),
+                title: s.recorded_session_name.clone(),
+                model: s.model.clone(),
+                last_file_size: s.last_file_size,
+            });
+        let meta = crate::omp::read_jsonl_meta(&jsonl_path, previous);
         let cwd = meta
             .as_ref()
             .and_then(|m| m.cwd.clone())
@@ -670,7 +681,7 @@ pub fn discover_sessions(prev_sessions: &HashMap<String, Session>) -> Vec<Sessio
             last_activity,
             started_at: live.started_at,
             jsonl_path,
-            last_file_size: 0,
+            last_file_size: meta.as_ref().map(|m| m.last_file_size).unwrap_or(0),
             tags,
             recorded_session_name: recorded_session_name.clone(),
             session_name: recorded_session_name,
