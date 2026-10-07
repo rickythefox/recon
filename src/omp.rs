@@ -64,6 +64,16 @@ pub fn session_id_from_jsonl_path(path: &str) -> Option<String> {
 /// Apply metadata records without allocating the ignored message/tool payloads.
 fn apply_jsonl_meta(meta: &mut OmpSessionMeta, line: &[u8]) {
     #[derive(serde::Deserialize)]
+    struct Message<'a> {
+        #[serde(borrow)]
+        role: Option<std::borrow::Cow<'a, str>>,
+        #[serde(borrow)]
+        provider: Option<std::borrow::Cow<'a, str>>,
+        #[serde(borrow)]
+        model: Option<std::borrow::Cow<'a, str>>,
+    }
+
+    #[derive(serde::Deserialize)]
     struct Record<'a> {
         #[serde(rename = "type")]
         kind: &'a str,
@@ -71,6 +81,8 @@ fn apply_jsonl_meta(meta: &mut OmpSessionMeta, line: &[u8]) {
         cwd: Option<String>,
         title: Option<String>,
         model: Option<String>,
+        #[serde(borrow)]
+        message: Option<Message<'a>>,
     }
 
     // Only top-level metadata participates; quoted records in messages do not.
@@ -100,6 +112,19 @@ fn apply_jsonl_meta(meta: &mut OmpSessionMeta, line: &[u8]) {
         "model_change" => {
             if record.model.is_some() {
                 meta.model = record.model;
+            }
+        }
+        // Sessions without a model_change record still name the model on each reply.
+        "message" => {
+            if let Some(Message {
+                role: Some(role),
+                provider: Some(provider),
+                model: Some(model),
+            }) = record.message
+            {
+                if role == "assistant" {
+                    meta.model = Some(format!("{provider}/{model}"));
+                }
             }
         }
         _ => {}
@@ -385,6 +410,33 @@ mod tests {
         assert_eq!(meta.cwd.as_deref(), Some("/Users/richard/src/oss/recon"));
         assert_eq!(meta.title.as_deref(), Some("Add omp agent support"));
         assert_eq!(meta.model.as_deref(), Some("xai-oauth/grok-4.6"));
+    }
+
+    #[test]
+    fn falls_back_to_assistant_message_model_without_model_change() {
+        // Some OMP transcripts never write model_change; replies still carry provider/model.
+        let content = r#"
+{"type":"session","version":3,"id":"no-model-change","cwd":"/work"}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
+{"type":"message","message":{"role":"assistant","content":[],"provider":"anthropic","model":"claude-opus-5-5"}}
+{"type":"message","message":{"role":"toolResult","provider":"xai-oauth","model":"grok-4.7"}}
+"#;
+        let mut meta = OmpSessionMeta::default();
+        for line in content.lines() {
+            apply_jsonl_meta(&mut meta, line.as_bytes());
+        }
+        assert_eq!(meta.model.as_deref(), Some("anthropic/claude-opus-5-5"));
+
+        // A later switch, then a reply from the new model, keeps the newest.
+        apply_jsonl_meta(
+            &mut meta,
+            br#"{"type":"model_change","model":"xai-oauth/grok-4.7"}"#,
+        );
+        apply_jsonl_meta(
+            &mut meta,
+            br#"{"type":"message","message":{"role":"assistant","provider":"xai-oauth","model":"grok-4.7"}}"#,
+        );
+        assert_eq!(meta.model.as_deref(), Some("xai-oauth/grok-4.7"));
     }
 
     #[test]

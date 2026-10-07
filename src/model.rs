@@ -58,6 +58,7 @@ pub fn display_name(model_id: &str) -> &str {
         "gpt-5.4" => "GPT-5.4",
         "o4-mini" => "o4-mini",
         "o3" => "o3",
+        "grok-4.7" => "Grok 4.7",
         "grok-4.6" => "Grok 4.6",
         _ => model_id,
     }
@@ -184,6 +185,7 @@ mod tests {
     fn displays_provider_prefixed_omp_models() {
         assert_eq!(display_name("xai-oauth/grok-4.6"), "Grok 4.6");
         assert_eq!(display_name("amazon-bedrock/xai.grok-4.6"), "Grok 4.6");
+        assert_eq!(display_name("xai-oauth/grok-4.7"), "Grok 4.7");
         assert_eq!(display_name("anthropic/claude-opus-4-8"), "Opus 4.8");
         assert_eq!(display_name("anthropic/claude-opus-5-5"), "Opus 5.5");
         assert_eq!(display_name("anthropic/claude-sonnet-5-5"), "Sonnet 5.5");
