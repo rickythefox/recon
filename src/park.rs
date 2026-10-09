@@ -23,12 +23,7 @@ fn default_agent() -> String {
 }
 
 fn park_file_path() -> Option<std::path::PathBuf> {
-    dirs::home_dir().map(|h| {
-        h.join(".local")
-            .join("state")
-            .join("recon")
-            .join("parked.json")
-    })
+    crate::state::state_dir().map(|d| d.join("parked.json"))
 }
 
 pub fn park() {
@@ -43,20 +38,9 @@ pub fn park() {
             if s.agent == crate::session::AgentKind::Omp {
                 return None;
             }
-            // Determine the resume ID:
-            // - For Codex: use session_id directly (the jsonl_path stem is a rollout
-            //   filename, not the session UUID that codex --session expects).
-            // - For Claude: use the JSONL filename stem, which for resumed sessions
-            //   is the original session ID that `claude --resume` expects.
-            let resume_id = if s.agent == crate::session::AgentKind::Codex {
-                s.session_id.clone()
-            } else {
-                s.jsonl_path
-                    .file_stem()
-                    .and_then(|f| f.to_str())
-                    .map(|f| f.to_string())
-                    .unwrap_or_else(|| s.session_id.clone())
-            };
+            // The stable conversation id is what each agent's resume expects
+            // (for Claude: the JSONL stem, i.e. the original session id).
+            let resume_id = s.stable_id()?.to_string();
             Some(ParkedSession {
                 session_id: resume_id,
                 tmux_session: s.tmux_session.as_ref()?.clone(),

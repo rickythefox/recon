@@ -4,6 +4,7 @@ mod codex;
 mod config;
 mod history;
 mod kitty;
+mod marks;
 mod model;
 mod new_session;
 mod omp;

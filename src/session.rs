@@ -150,6 +150,18 @@ pub struct Session {
 }
 
 impl Session {
+    /// Conversation id that survives resume: the JSONL stem for Claude (a
+    /// resume writes a new id to {PID}.json but keeps the original JSONL),
+    /// the session id for Codex/OMP. None before the conversation exists.
+    pub fn stable_id(&self) -> Option<&str> {
+        match self.agent {
+            AgentKind::Claude => self.jsonl_path.file_stem()?.to_str(),
+            AgentKind::Codex => Some(&self.session_id),
+            // "omp-{pane}" is the placeholder when the JSONL has no parseable id
+            AgentKind::Omp => Some(self.session_id.as_str()).filter(|id| !id.starts_with("omp-")),
+        }
+    }
+
     pub fn room_id(&self) -> String {
         match &self.relative_dir {
             Some(dir) => format!("{} \u{203A} {}", self.project_name, dir),
@@ -1895,7 +1907,8 @@ fn discover_agent_tmux_panes() -> Vec<DiscoveredPane> {
             || command == "bun"
             || command == "omp";
 
-        let is_shell = command == "bash" || command == "sh" || command == "zsh";
+        let is_shell =
+            command == "bash" || command == "sh" || command == "zsh" || command == "fish";
 
         if !is_candidate && !is_shell {
             continue;

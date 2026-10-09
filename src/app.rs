@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::Config;
+use crate::marks::Marks;
 use crate::session::{self, Session};
 use crate::state;
 use crate::tmux;
@@ -32,6 +34,8 @@ pub struct App {
     prev_session_id: Option<String>,      // for 'b' to toggle back
     prev_sessions: HashMap<String, Session>,
     pub shift_enter_zoom: bool, // kitty maps Shift+Enter -> Ctrl+J (zoom label)
+    marks: Marks,               // persistent user marks, loaded on refresh
+    footer_hint: Option<(String, Instant)>, // transient footer message + when set
 }
 
 impl App {
@@ -56,6 +60,8 @@ impl App {
             prev_session_id: saved.prev_session_id,
             prev_sessions: HashMap::new(),
             shift_enter_zoom: crate::kitty::shift_enter_sends_ctrl_j(),
+            marks: Marks::new(Marks::default_path()),
+            footer_hint: None,
         }
     }
 
@@ -71,6 +77,11 @@ impl App {
             .collect();
 
         self.sessions = sessions;
+
+        // Pick up marks changed by another dashboard; surface unreadable files
+        if let Err(e) = self.marks.sync() {
+            self.set_footer_hint(e);
+        }
 
         let count = self.filtered_indices().len();
         if count == 0 {
@@ -92,6 +103,39 @@ impl App {
         if self.selected != selected {
             self.selected = selected;
             self.selected_changed_tick = self.tick;
+        }
+    }
+
+    /// Whether the session carries an unexpired mark.
+    pub fn is_marked(&self, session: &Session) -> bool {
+        session
+            .stable_id()
+            .is_some_and(|id| self.marks.is_marked(id))
+    }
+
+    /// Footer message shown for a few seconds after an action.
+    pub fn footer_hint(&self) -> Option<&str> {
+        self.footer_hint
+            .as_ref()
+            .filter(|(_, at)| at.elapsed() < Duration::from_secs(3))
+            .map(|(msg, _)| msg.as_str())
+    }
+
+    fn set_footer_hint(&mut self, msg: impl Into<String>) {
+        self.footer_hint = Some((msg.into(), Instant::now()));
+    }
+
+    /// Toggle the persistent mark on the selected session.
+    fn toggle_selected_mark(&mut self) {
+        let Some(real_idx) = self.resolve_selected() else {
+            return;
+        };
+        let Some(id) = self.sessions[real_idx].stable_id() else {
+            self.set_footer_hint("No conversation yet - mark it once it has started");
+            return;
+        };
+        if let Err(e) = self.marks.toggle(id) {
+            self.set_footer_hint(e);
         }
     }
 
@@ -242,6 +286,7 @@ impl App {
                 self.reset_selected_scroll();
             }
             KeyCode::Char('v') => self.view_mode = ViewMode::View,
+            KeyCode::Char('m') => self.toggle_selected_mark(),
             // Ctrl+J (what the terminal's Shift+Enter remap emits): jump to the
             // pane and zoom it. Must precede the plain 'j' navigation arm.
             KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {

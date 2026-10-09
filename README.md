@@ -132,6 +132,7 @@ recon unpark                                 # Restore previously parked session
 | `i` / `Tab` | Jump to next agent waiting for input |
 | `c` | Schedule continue at session reset |
 | `x` | Kill selected session |
+| `m` | Mark/unmark selected session (persists across relaunches and resumes, expires after 30 days) |
 | `v` | Switch to Tamagotchi view |
 | `q` / `Esc` | Quit (Esc clears filter first) |
 

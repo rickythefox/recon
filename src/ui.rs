@@ -218,10 +218,16 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
             cells.extend([project_cell, status_cell, model_cell, Cell::from(activity)]);
             let row = Row::new(cells).height(ROW_HEIGHT);
 
+            // Input alert wins; selection and mark combine into a lighter tint
+            let marked = app.is_marked(session);
             if session.status == SessionStatus::Input {
                 row.style(Style::default().bg(Color::Rgb(50, 40, 0)))
+            } else if display_idx == app.selected && marked {
+                row.style(Style::default().bg(Color::Rgb(45, 60, 95)))
             } else if display_idx == app.selected {
                 row.style(Style::default().bg(Color::Rgb(50, 50, 55)))
+            } else if marked {
+                row.style(Style::default().bg(Color::Rgb(20, 35, 65)))
             } else {
                 row
             }
@@ -444,7 +450,9 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
-    let spans = if app.filter_active {
+    let spans = if let Some(hint) = app.footer_hint() {
+        vec![Span::styled(hint, Style::default().fg(Color::Yellow))]
+    } else if app.filter_active {
         vec![
             Span::styled("Esc", Style::default().fg(Color::Cyan)),
             Span::raw(" clear  "),
@@ -480,6 +488,8 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             Span::raw(" search  "),
             Span::styled("v", Style::default().fg(Color::Cyan)),
             Span::raw(" view  "),
+            Span::styled("m", Style::default().fg(Color::Cyan)),
+            Span::raw(" mark  "),
             Span::styled("i", Style::default().fg(Color::Cyan)),
             Span::raw(" next input  "),
             Span::styled("q", Style::default().fg(Color::Cyan)),

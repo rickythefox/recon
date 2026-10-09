@@ -13,6 +13,11 @@ fn state_path() -> PathBuf {
     path
 }
 
+/// recon's state directory (`~/.local/state/recon`) for parked sessions and marks.
+pub fn state_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".local").join("state").join("recon"))
+}
+
 pub fn load() -> SavedState {
     let data = fs::read_to_string(state_path()).unwrap_or_default();
     let v: serde_json::Value = serde_json::from_str(&data).unwrap_or_default();
