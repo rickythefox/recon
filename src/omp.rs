@@ -252,12 +252,18 @@ pub fn omp_status_from_content(content: &str) -> SessionStatus {
         if let Some(count) = tail.iter().find_map(|l| waiting_job_count(l)) {
             return SessionStatus::BackgroundTasks(count);
         }
-        // The footer's "⚙ N" gear counts live background jobs even when the
-        // waiting line has scrolled away (e.g. "Polling in 60 min (bg_2)").
+        // The footer's "⚙ N" gear and "👥 N" subagent counters track live
+        // background work even when the waiting line has scrolled away.
         if let Some(count) = live_footer.and_then(|l| footer_job_count(l)) {
             return SessionStatus::BackgroundTasks(count);
         }
         return SessionStatus::Working;
+    }
+
+    // Idle footer but background jobs or subagents still running: the turn
+    // ended while spawned work continues ("╭── π > … ◀ 👥 1 < title").
+    if let Some(count) = live_footer.and_then(|l| footer_job_count(l)) {
+        return SessionStatus::BackgroundTasks(count);
     }
 
     SessionStatus::Idle
@@ -279,15 +285,17 @@ fn is_live_tool_line(line: &str) -> bool {
     (spinner && line.ends_with("⟦esc⟧")) || line.starts_with('\u{238B}') // ⎋
 }
 
-/// Parse the footer gear "⚙ N" → N background jobs; None when absent or zero.
+/// Sum the footer counters "⚙ N" (background jobs) and "👥 N" (subagents);
+/// None when both are absent or zero.
 fn footer_job_count(line: &str) -> Option<u32> {
-    let pos = line.find('\u{2699}')?; // ⚙
-    let count: u32 = line[pos + '\u{2699}'.len_utf8()..]
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()?;
-    (count > 0).then_some(count)
+    let count = |marker: &str| -> u32 {
+        line.find(marker)
+            .and_then(|pos| line[pos + marker.len()..].split_whitespace().next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0)
+    };
+    let total = count("\u{2699}") + count("\u{1F465}"); // ⚙, 👥
+    (total > 0).then_some(total)
 }
 
 /// Parse "ⓘ waiting on 2 jobs" → 2, tolerating the singular/plural wording.
@@ -620,6 +628,27 @@ mod tests {
         assert_eq!(footer_job_count("▶─7%─◀ ⚙ 2 < title ──╮"), Some(2));
         assert_eq!(footer_job_count("▶─7%─◀ ⚙ 0 < title ──╮"), None);
         assert_eq!(footer_job_count("▶─7%─◀ < title ──╮"), None);
+    }
+
+    #[test]
+    fn idle_footer_with_subagent_count_is_background_tasks() {
+        // Turn ended, subagent still running: idle "π" footer carries "👥 1".
+        let content = "\
+ Subagents
+  └─ • ◔ anthropic/claude-opus-5-5 Wor307TestResume: Run TEST ETL night…
+╭── π > ◒ Opus 5.5 🙈 > ⑂ main > S81.70 ▶──64%┃1M─◀ 👥 1 < 🎫 WOR30… ──╮
+╰─                                                                    ─╯
+";
+        assert_eq!(
+            omp_status_from_content(content),
+            SessionStatus::BackgroundTasks(1)
+        );
+    }
+
+    #[test]
+    fn footer_job_count_sums_gear_and_subagents() {
+        assert_eq!(footer_job_count("◀ ⚙ 1 👥 2 < title ──╮"), Some(3));
+        assert_eq!(footer_job_count("◀ 👥 0 < title ──╮"), None);
     }
 
     #[test]
