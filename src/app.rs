@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::Config;
-use crate::marks::Marks;
+use crate::marks::{Marks, Snapshot};
 use crate::session::{self, Session};
 use crate::state;
 use crate::tmux;
@@ -76,12 +76,17 @@ impl App {
             .map(|s| (s.session_id.clone(), s.clone()))
             .collect();
 
-        self.sessions = sessions;
-
         // Pick up marks changed by another dashboard; surface unreadable files
         if let Err(e) = self.marks.sync() {
             self.set_footer_hint(e);
         }
+        // Keep marked sessions' folder/title current so they can be resumed later
+        if let Err(e) = self.marks.record(&sessions) {
+            self.set_footer_hint(e);
+        }
+        let closed = self.marks.closed_sessions(&sessions);
+        self.sessions = sessions;
+        self.sessions.extend(closed);
 
         let count = self.filtered_indices().len();
         if count == 0 {
@@ -130,12 +135,21 @@ impl App {
         let Some(real_idx) = self.resolve_selected() else {
             return;
         };
-        let Some(id) = self.sessions[real_idx].stable_id() else {
+        let session = &self.sessions[real_idx];
+        let Some(id) = session.stable_id().map(str::to_string) else {
             self.set_footer_hint("No conversation yet - mark it once it has started");
             return;
         };
-        if let Err(e) = self.marks.toggle(id) {
-            self.set_footer_hint(e);
+        let snapshot = Snapshot::of(session);
+        let closed = session.status == session::SessionStatus::Closed;
+        match self.marks.toggle(&id, snapshot) {
+            // Unmarking a closed session drops its only reason to be listed
+            Ok(false) if closed => {
+                self.sessions.remove(real_idx);
+                self.clamp_selection();
+            }
+            Ok(_) => {}
+            Err(e) => self.set_footer_hint(e),
         }
     }
 
@@ -212,15 +226,39 @@ impl App {
     }
 
     fn switch_to_session_inner(&mut self, real_idx: usize, zoom: bool) {
-        if let Some(session) = self.sessions.get(real_idx) {
-            if let Some(target) = &session.pane_target {
-                state::save(&session.session_id, self.last_session_id.as_deref());
-                if zoom {
-                    tmux::zoom_pane(target);
-                }
-                tmux::switch_to_pane(target);
+        let Some(session) = self.sessions.get(real_idx) else {
+            return;
+        };
+        if session.status == session::SessionStatus::Closed {
+            self.resume_closed(real_idx);
+            return;
+        }
+        if let Some(target) = &session.pane_target {
+            state::save(&session.session_id, self.last_session_id.as_deref());
+            if zoom {
+                tmux::zoom_pane(target);
+            }
+            tmux::switch_to_pane(target);
+            self.should_quit = true;
+        }
+    }
+
+    /// Start the agent again for a closed marked session and switch to it.
+    fn resume_closed(&mut self, real_idx: usize) {
+        let session = &self.sessions[real_idx];
+        let id = session.session_id.clone();
+        let snapshot = self.marks.snapshot(&id);
+        let name = snapshot
+            .and_then(|s| s.tmux_session.clone())
+            .unwrap_or_else(|| session.project_name.clone());
+        let cwd = snapshot.map_or_else(|| session.cwd.clone(), |s| s.cwd.clone());
+        match tmux::resume_session(&id, Some(&name), Some(&cwd), &session.agent) {
+            Ok(target) => {
+                state::save(&id, self.last_session_id.as_deref());
+                tmux::switch_to_pane(&target);
                 self.should_quit = true;
             }
+            Err(e) => self.set_footer_hint(format!("Resume failed: {e}")),
         }
     }
 
@@ -368,15 +406,8 @@ impl App {
                     return;
                 }
                 KeyCode::Enter => {
-                    if let Some(session) = self.selected_zoomed_session() {
-                        if let Some(target) = session.pane_target.clone() {
-                            state::save(
-                                &session.session_id.clone(),
-                                self.last_session_id.as_deref(),
-                            );
-                            tmux::switch_to_pane(&target);
-                            self.should_quit = true;
-                        }
+                    if let Some(real_idx) = self.selected_zoomed_session_index() {
+                        self.switch_to_session(real_idx);
                     }
                     return;
                 }
@@ -475,14 +506,10 @@ impl App {
             }
             KeyCode::Enter => {
                 let indices = self.filtered_indices();
-                if indices.len() == 1 {
-                    if let Some(session) = self.sessions.get(indices[0]) {
-                        if let Some(target) = &session.pane_target {
-                            state::save(&session.session_id, self.last_session_id.as_deref());
-                            tmux::switch_to_pane(target);
-                            self.should_quit = true;
-                            return;
-                        }
+                if let [real_idx] = indices[..] {
+                    self.switch_to_session(real_idx);
+                    if self.should_quit {
+                        return;
                     }
                 }
                 self.filter_active = false;

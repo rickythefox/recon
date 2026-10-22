@@ -198,6 +198,7 @@ fn sprite_data(status: &SessionStatus, frame: usize) -> (&'static Sprite, Palett
         SessionStatus::Limited(_) | SessionStatus::ContinueScheduled(_) => {
             (&SPRITE_INPUT[0], PAL_INPUT)
         }
+        SessionStatus::Closed => (&SPRITE_IDLE[0], PAL_IDLE),
     }
 }
 
@@ -325,7 +326,7 @@ fn status_color(status: &SessionStatus) -> Color {
     match status {
         SessionStatus::New => Color::Blue,
         SessionStatus::Working => Color::Green,
-        SessionStatus::Idle => Color::DarkGray,
+        SessionStatus::Idle | SessionStatus::Closed => Color::DarkGray,
         SessionStatus::Input => Color::Yellow,
         SessionStatus::BackgroundTasks(_) => BACKGROUND_TASK_COLOR,
         SessionStatus::BackgroundAgents(_) => BACKGROUND_TASK_COLOR,
@@ -594,7 +595,12 @@ fn render_character(
     lines.extend(sprite_lines);
 
     // Session name
-    let name = session.tmux_session.as_deref().unwrap_or("???");
+    // Closed marked sessions have no tmux session; show their title instead
+    let name = session
+        .tmux_session
+        .as_deref()
+        .or(session.session_name.as_deref())
+        .unwrap_or("???");
     let name_style = if is_selected {
         Style::default()
             .fg(Color::Cyan)

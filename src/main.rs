@@ -80,6 +80,7 @@ fn main() -> io::Result<()> {
                 match tmux::resume_session(
                     &session_id,
                     name.as_deref(),
+                    None,
                     &crate::session::AgentKind::Claude,
                 ) {
                     Ok(sess) => {
@@ -96,7 +97,7 @@ fn main() -> io::Result<()> {
             } else {
                 let result = history::run_resume_picker()?;
                 if let Some((session_id, sess_name, agent)) = result {
-                    match tmux::resume_session(&session_id, Some(&sess_name), &agent) {
+                    match tmux::resume_session(&session_id, Some(&sess_name), None, &agent) {
                         Ok(sess) => {
                             tmux::switch_to_pane(&sess);
                             eprintln!("Resumed in session: {sess}");

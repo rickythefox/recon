@@ -149,7 +149,7 @@ pub fn unpark() {
             "codex" => crate::session::AgentKind::Codex,
             _ => crate::session::AgentKind::Claude,
         };
-        match tmux::resume_session(&s.session_id, Some(&s.tmux_session), &agent) {
+        match tmux::resume_session(&s.session_id, Some(&s.tmux_session), Some(&s.cwd), &agent) {
             Ok(name) => {
                 eprintln!(
                     "  Restored {} ({})",

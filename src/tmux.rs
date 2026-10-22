@@ -114,9 +114,11 @@ pub fn create_session(
 
 /// Resume a session in a new tmux session. Dispatches to Claude or Codex.
 /// No-op if the session is already running — returns the existing tmux name.
+/// `cwd` is used when the agent's own records don't name the project directory.
 pub fn resume_session(
     session_id: &str,
     name: Option<&str>,
+    cwd: Option<&str>,
     agent: &crate::session::AgentKind,
 ) -> Result<String, String> {
     if let Some(existing) = session::find_live_tmux_for_session(session_id) {
@@ -137,6 +139,7 @@ pub fn resume_session(
         }
         crate::session::AgentKind::Omp => None,
     }
+    .or_else(|| cwd.filter(|c| session::validate_cwd(c)).map(str::to_string))
     .or_else(|| {
         std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())

@@ -81,6 +81,8 @@ pub enum SessionStatus {
     BackgroundAgents(u32),
     Limited(SessionLimit),
     ContinueScheduled(SessionLimit),
+    // Marked conversation whose agent is no longer running; Enter resumes it.
+    Closed,
 }
 
 impl SessionStatus {
@@ -98,6 +100,7 @@ impl SessionStatus {
             SessionStatus::ContinueScheduled(limit) => {
                 format!("Queued {}", limit.label_time())
             }
+            SessionStatus::Closed => "Closed".to_string(),
         }
     }
 
@@ -110,7 +113,8 @@ impl SessionStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AgentKind {
     Claude,
     Codex,
@@ -154,6 +158,10 @@ impl Session {
     /// resume writes a new id to {PID}.json but keeps the original JSONL),
     /// the session id for Codex/OMP. None before the conversation exists.
     pub fn stable_id(&self) -> Option<&str> {
+        // Closed rows are rebuilt from marks.json, keyed by the stable id itself
+        if self.status == SessionStatus::Closed {
+            return Some(&self.session_id);
+        }
         match self.agent {
             AgentKind::Claude => self.jsonl_path.file_stem()?.to_str(),
             AgentKind::Codex => Some(&self.session_id),

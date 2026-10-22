@@ -110,6 +110,7 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 SessionStatus::Limited(_) | SessionStatus::ContinueScheduled(_) => {
                     ("●", Color::Red)
                 }
+                SessionStatus::Closed => ("○", dim),
             };
             let status_label = session.status.label();
 
@@ -209,10 +210,15 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                 Cell::from(num)
             };
             let mut cells = vec![id_cell];
-            // Model/Context: model on line 1, token usage on line 2
+            // Model/Context: model on line 1, token usage on line 2 (unknown once closed)
+            let token_line = if session.status == SessionStatus::Closed {
+                Line::default()
+            } else {
+                Line::from(Span::styled(session.token_display(), token_style))
+            };
             let model_cell = Cell::from(Text::from(vec![
                 Line::from(session.model_display()),
-                Line::from(Span::styled(session.token_display(), token_style)),
+                token_line,
             ]));
 
             cells.extend([project_cell, status_cell, model_cell, Cell::from(activity)]);
