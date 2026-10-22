@@ -98,6 +98,13 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
             };
 
             let tmux_name = session.tmux_session.as_deref().unwrap_or("—");
+            // tmux window index from `session:window.pane`
+            let window_index = session
+                .pane_target
+                .as_deref()
+                .and_then(|t| t.rsplit_once(':'))
+                .and_then(|(_, wp)| wp.split_once('.'))
+                .map(|(w, _)| w);
 
             // Status: colored dot + label
             let (status_dot, status_color) = match session.status {
@@ -147,6 +154,9 @@ fn render_table(frame: &mut Frame, app: &App, area: Rect) {
                         push_segment(&mut line1, "::", Style::default().fg(dim));
                         push_segment(&mut line1, dir, Style::default().fg(Color::Cyan));
                     }
+                }
+                if let Some(w) = window_index {
+                    push_segment(&mut line1, &format!(" [{w}]"), Style::default().fg(dim));
                 }
 
                 // Line 2: session title followed by branch
