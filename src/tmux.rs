@@ -128,7 +128,86 @@ pub fn resume_session(
     let tmux_name = name
         .map(|n| n.to_string())
         .unwrap_or_else(|| session_id[..6.min(session_id.len())].to_string());
+    let base_name = sanitize_session_name(&tmux_name);
+    let session_name = unique_session_name(&base_name);
 
+    let (cwd, command) = resume_command(session_id, cwd, agent);
+    let mut tmux_cmd_args = vec![
+        "new-session".to_string(),
+        "-d".to_string(),
+        "-s".to_string(),
+        session_name.clone(),
+        "-c".to_string(),
+        cwd,
+    ];
+    tmux_cmd_args.extend(command);
+
+    let status = Command::new("tmux")
+        .args(&tmux_cmd_args)
+        .status()
+        .map_err(|e| format!("Failed to create tmux session: {e}"))?;
+
+    if !status.success() {
+        return Err("tmux new-session failed".to_string());
+    }
+
+    Ok(session_name)
+}
+
+/// Where `resume_in_active` opens the resumed agent.
+#[derive(Clone, Copy)]
+pub enum Placement {
+    /// Pane below the active one in the client's current window
+    Split,
+    /// New window in the client's current session
+    Window,
+}
+
+/// Resume a session inside the tmux client's active session (split pane or
+/// new window). Returns the pane id to switch to, or the existing pane
+/// target when the conversation is already running.
+pub fn resume_in_active(
+    session_id: &str,
+    cwd: Option<&str>,
+    agent: &crate::session::AgentKind,
+    placement: Placement,
+) -> Result<String, String> {
+    if let Some(existing) = session::find_live_tmux_for_session(session_id) {
+        return Ok(existing);
+    }
+    let (cwd, command) = resume_command(session_id, cwd, agent);
+    // No -t: tmux targets the client's current window/session, which is what
+    // the user sees even when recon runs in a popup.
+    let mut args = match placement {
+        Placement::Split => vec!["split-window".to_string(), "-v".to_string()],
+        Placement::Window => vec!["new-window".to_string()],
+    };
+    args.extend([
+        "-P".to_string(),
+        "-F".to_string(),
+        "#{pane_id}".to_string(),
+        "-c".to_string(),
+        cwd,
+    ]);
+    args.extend(command);
+
+    let output = Command::new("tmux")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("Failed to run tmux: {e}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Start directory plus the `-e RECON_RESUMED_FROM=… <agent> <resume args>`
+/// tail shared by every tmux command that resumes a conversation.
+fn resume_command(
+    session_id: &str,
+    cwd: Option<&str>,
+    agent: &crate::session::AgentKind,
+) -> (String, Vec<String>) {
     // Use the original session's cwd so we start in the right project directory.
     let cwd = match agent {
         crate::session::AgentKind::Claude => {
@@ -147,10 +226,6 @@ pub fn resume_session(
     })
     .unwrap_or_else(|| ".".to_string());
 
-    let base_name = sanitize_session_name(&tmux_name);
-    let session_name = unique_session_name(&base_name);
-
-    // Build agent-specific command
     let (bin, args): (String, Vec<String>) = match agent {
         crate::session::AgentKind::Claude => {
             let path = which_claude().unwrap_or_else(|| "claude".to_string());
@@ -166,32 +241,15 @@ pub fn resume_session(
         }
     };
 
-    // Store the original session-id in the tmux session environment so recon can
+    // Store the original session-id in the pane environment so recon can
     // find the right JSONL without parsing process command lines.
-    let env_var = format!("RECON_RESUMED_FROM={session_id}");
-    let mut tmux_cmd_args = vec![
-        "new-session".to_string(),
-        "-d".to_string(),
-        "-s".to_string(),
-        session_name.clone(),
-        "-c".to_string(),
-        cwd,
+    let mut command = vec![
         "-e".to_string(),
-        env_var,
+        format!("RECON_RESUMED_FROM={session_id}"),
         bin,
     ];
-    tmux_cmd_args.extend(args);
-
-    let status = Command::new("tmux")
-        .args(&tmux_cmd_args)
-        .status()
-        .map_err(|e| format!("Failed to create tmux session: {e}"))?;
-
-    if !status.success() {
-        return Err("tmux new-session failed".to_string());
-    }
-
-    Ok(session_name)
+    command.extend(args);
+    (cwd, command)
 }
 
 /// Get default session name and cwd for a new session.

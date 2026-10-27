@@ -230,7 +230,13 @@ impl App {
             return;
         };
         if session.status == session::SessionStatus::Closed {
-            self.resume_closed(real_idx);
+            // Enter splits the current window; Shift+Enter opens a new window
+            let placement = if zoom {
+                tmux::Placement::Window
+            } else {
+                tmux::Placement::Split
+            };
+            self.resume_closed(real_idx, placement);
             return;
         }
         if let Some(target) = &session.pane_target {
@@ -243,16 +249,23 @@ impl App {
         }
     }
 
-    /// Start the agent again for a closed marked session and switch to it.
-    fn resume_closed(&mut self, real_idx: usize) {
+    /// Start the agent again for a closed marked session in the active tmux
+    /// session and switch to it. Outside tmux there is no active session, so
+    /// it gets its own tmux session instead.
+    fn resume_closed(&mut self, real_idx: usize, placement: tmux::Placement) {
         let session = &self.sessions[real_idx];
         let id = session.session_id.clone();
         let snapshot = self.marks.snapshot(&id);
-        let name = snapshot
-            .and_then(|s| s.tmux_session.clone())
-            .unwrap_or_else(|| session.project_name.clone());
         let cwd = snapshot.map_or_else(|| session.cwd.clone(), |s| s.cwd.clone());
-        match tmux::resume_session(&id, Some(&name), Some(&cwd), &session.agent) {
+        let result = if std::env::var("TMUX").is_ok() {
+            tmux::resume_in_active(&id, Some(&cwd), &session.agent, placement)
+        } else {
+            let name = snapshot
+                .and_then(|s| s.tmux_session.clone())
+                .unwrap_or_else(|| session.project_name.clone());
+            tmux::resume_session(&id, Some(&name), Some(&cwd), &session.agent)
+        };
+        match result {
             Ok(target) => {
                 state::save(&id, self.last_session_id.as_deref());
                 tmux::switch_to_pane(&target);
@@ -403,6 +416,13 @@ impl App {
                 }
                 KeyCode::Char('h') | KeyCode::Left => {
                     self.view_selected_agent = self.view_selected_agent.saturating_sub(1);
+                    return;
+                }
+                // Ctrl+J (terminal's Shift+Enter remap): zoom, or resume closed in a new window
+                KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if let Some(real_idx) = self.selected_zoomed_session_index() {
+                        self.switch_to_session_zoomed(real_idx);
+                    }
                     return;
                 }
                 KeyCode::Enter => {
