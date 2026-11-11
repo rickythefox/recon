@@ -307,9 +307,16 @@ fn waiting_job_count(line: &str) -> Option<u32> {
     matches!(words.next()?, "job" | "jobs").then_some(count)
 }
 
-/// Footer markers for the OMP `ask` widget.
+/// Footer markers for the OMP `ask` widget. Newer OMP renders the hint with
+/// key glyphs ("│ ⏎ choose · … · ⎋ cancel │"); anchor it to the box row so
+/// prose quoting "⎋ cancel" in scrollback doesn't match.
 fn is_omp_input_line(line: &str) -> bool {
-    line.contains("Enter select")
+    let glyph_hint = line
+        .strip_prefix('│')
+        .is_some_and(|row| row.trim_start().starts_with('\u{23CE}')) // ⏎
+        && line.contains("\u{238B} cancel"); // ⎋
+    glyph_hint
+        || line.contains("Enter select")
         || line.contains("Esc cancel")
         || line.contains("Ask 1 question")
         || line.contains("╭─ Ask")
@@ -743,6 +750,45 @@ echo waiting on 1 job
 ╰────────────────────────────────────────────────────────────────────────────────╯
 ";
         assert_eq!(omp_status_from_content(content), SessionStatus::Input);
+    }
+
+    #[test]
+    fn tall_ask_form_with_glyph_hint_is_input() {
+        // The "╭─ Ask · 1/3" header is above the scanned tail; only the
+        // glyph-style hint line ("⎋ cancel") is in view.
+        let content = "\
+╭─ Ask · 1/3 ──────────────────────────────────────────────────────────────────────────────╮
+│ Deleted. rg-worko-email-enrichment-dev is gone (az group exists = false). Both           │
+│ enrichment apps return 200 on /health. Inventory doc updated on knowledge-base main      │
+│ (81b4625).                                                                               │
+│                                                                                          │
+│ Draft comment for WOR-404:                                                               │
+│                                                                                          │
+│   ## TL;DR for humans                                                                    │
+│                                                                                          │
+│   We deleted the old email enrichment resource group on 2026-11-11.                      │
+│   The current DEV and PROD enrichment apps are healthy.                                  │
+│   One unused PROD monitoring item lost its log storage. It sent no data for 30 days.     │
+│                                                                                          │
+│                                                                                          │
+│                                                                                          │
+├──────────────────────────────────────────────────────────────────────────────────────────┤
+│ ⏎ choose · n note · ↑/↓ move · ⇥ next field · ⎋ cancel · ⌥H hide · ←/→ page              │
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
+";
+        assert_eq!(omp_status_from_content(content), SessionStatus::Input);
+    }
+
+    #[test]
+    fn quoted_glyph_hint_in_prose_stays_idle() {
+        let content = "\
+ - is_omp_input_line now also matches ⎋ cancel.
+ uses key symbols: ⏎ choose · … · ⎋ cancel. That form is
+
+╭── π  > ⬢ Opus 4.5 > 📁 ~/src/oss/recon > ◫ 26.3%/500K ──╮
+╰─                                                        ─╯
+";
+        assert_eq!(omp_status_from_content(content), SessionStatus::Idle);
     }
 
     #[test]
